@@ -11,8 +11,10 @@ import { cn } from '@/lib/utils'
 import {
   Pencil, Check, X, Loader2, Copy, Trash2, ArrowLeft,
   User, FolderOpen, Calendar, Sparkles, Send, Receipt,
-  Link2, MessageSquare, Plus, CheckCircle2,
+  Link2, MessageSquare, Plus, CheckCircle2, History, RotateCcw,
+  ChevronDown,
 } from 'lucide-react'
+import type { QuoteVersion } from '@/types/database'
 
 interface Props {
   quote: Quote & {
@@ -21,6 +23,7 @@ interface Props {
   }
   lineItems: QuoteLineItem[]
   provinceState: string
+  versions: QuoteVersion[]
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -46,7 +49,7 @@ function toLineItemDrafts(items: QuoteLineItem[]): LineItemDraft[] {
   }))
 }
 
-export function QuoteDetailClient({ quote, lineItems: initialLineItems, provinceState }: Props) {
+export function QuoteDetailClient({ quote, lineItems: initialLineItems, provinceState, versions: initialVersions }: Props) {
   const router = useRouter()
   const [editing, setEditing] = useState(false)
   const [lineItems, setLineItems] = useState<LineItemDraft[]>(toLineItemDrafts(initialLineItems))
@@ -72,6 +75,11 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
   // Convert to invoice state
   const [converting, setConverting] = useState(false)
 
+  // Version history
+  const [versions, setVersions] = useState<QuoteVersion[]>(initialVersions)
+  const [showVersions, setShowVersions] = useState(false)
+  const [restoring, setRestoring] = useState<string | null>(null)
+
   const taxInfo = getTaxInfo(provinceState)
   const subtotal = useMemo(() => lineItems.reduce((s, i) => s + i.total, 0), [lineItems])
   const taxAmount = subtotal * taxInfo.rate
@@ -86,6 +94,38 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
     setSaveError('')
     setSaving(true)
     const supabase = createClient()
+
+    // Snapshot current state before applying edits
+    const { data: currentItems } = await supabase
+      .from('quote_line_items')
+      .select('*')
+      .eq('quote_id', quote.id)
+      .order('position')
+
+    const nextVersionNumber = (versions.length > 0
+      ? Math.max(...versions.map((v) => v.version_number))
+      : 0) + 1
+
+    const { data: newVersion } = await supabase
+      .from('quote_versions')
+      .insert({
+        quote_id: quote.id,
+        version_number: nextVersionNumber,
+        snapshot: {
+          quote: {
+            subtotal: quote.subtotal, tax_amount: quote.tax_amount,
+            total: quote.total, notes_to_client: quote.notes_to_client,
+            internal_notes: quote.internal_notes, valid_until: quote.valid_until,
+          },
+          line_items: currentItems ?? [],
+        },
+      })
+      .select()
+      .single()
+
+    if (newVersion) {
+      setVersions((prev) => [newVersion, ...prev])
+    }
 
     const { error: delErr } = await supabase.from('quote_line_items').delete().eq('quote_id', quote.id)
     if (delErr) { setSaveError(delErr.message); setSaving(false); return }
@@ -209,6 +249,66 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
     const supabase = createClient()
     await supabase.from('quotes').delete().eq('id', quote.id)
     router.push('/quotes')
+  }
+
+  // ─── Restore version ──────────────────────────────────────────
+  async function handleRestoreVersion(version: QuoteVersion) {
+    if (!confirm(`Restore to version ${version.version_number}? Current state will be saved as a new version.`)) return
+    setRestoring(version.id)
+    const supabase = createClient()
+
+    // Snapshot current state first
+    const { data: currentItems } = await supabase
+      .from('quote_line_items').select('*').eq('quote_id', quote.id).order('position')
+    const nextVersionNumber = (versions.length > 0
+      ? Math.max(...versions.map((v) => v.version_number))
+      : 0) + 1
+    const { data: savedVersion } = await supabase
+      .from('quote_versions')
+      .insert({
+        quote_id: quote.id,
+        version_number: nextVersionNumber,
+        snapshot: {
+          quote: {
+            subtotal: quote.subtotal, tax_amount: quote.tax_amount, total: quote.total,
+            notes_to_client: quote.notes_to_client, internal_notes: quote.internal_notes,
+            valid_until: quote.valid_until,
+          },
+          line_items: currentItems ?? [],
+        },
+      })
+      .select()
+      .single()
+    if (savedVersion) setVersions((prev) => [savedVersion, ...prev])
+
+    // Apply snapshot
+    const snap = version.snapshot as {
+      quote: { subtotal: number; tax_amount: number; total: number; notes_to_client: string | null; internal_notes: string | null; valid_until: string | null }
+      line_items: QuoteLineItem[]
+    }
+
+    await supabase.from('quote_line_items').delete().eq('quote_id', quote.id)
+    if (snap.line_items?.length) {
+      await supabase.from('quote_line_items').insert(
+        snap.line_items.map((item: QuoteLineItem, idx: number) => ({
+          quote_id: quote.id, position: idx,
+          description: item.description, category: item.category,
+          quantity: item.quantity, unit: item.unit,
+          unit_price: item.unit_price, markup_percent: item.markup_percent,
+          total: item.total, from_price_book: item.from_price_book ?? false,
+        }))
+      )
+    }
+    if (snap.quote) {
+      await supabase.from('quotes').update({
+        subtotal: snap.quote.subtotal, tax_amount: snap.quote.tax_amount, total: snap.quote.total,
+        notes_to_client: snap.quote.notes_to_client, internal_notes: snap.quote.internal_notes,
+        valid_until: snap.quote.valid_until,
+      }).eq('id', quote.id)
+    }
+
+    setRestoring(null)
+    router.refresh()
   }
 
   return (
@@ -360,6 +460,51 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
           <span>{formatCurrency(editing ? total : quote.total, quote.currency)}</span>
         </div>
       </div>
+
+      {/* ── Version History Panel ── */}
+      {versions.length > 0 && (
+        <div className="card p-0 overflow-hidden">
+          <button
+            onClick={() => setShowVersions((v) => !v)}
+            className="w-full flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <History size={16} className="text-gray-400" />
+              <span className="font-semibold text-gray-900 text-sm">Version History</span>
+              <span className="badge bg-gray-100 text-gray-500">{versions.length}</span>
+            </div>
+            <ChevronDown size={16} className={cn('text-gray-400 transition-transform', showVersions && 'rotate-180')} />
+          </button>
+          {showVersions && (
+            <div className="border-t border-gray-100 divide-y divide-gray-100">
+              {versions.map((v) => {
+                const snap = v.snapshot as { quote?: { total?: number } }
+                return (
+                  <div key={v.id} className="px-6 py-3 flex items-center justify-between gap-4">
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">Version {v.version_number}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">{formatDate(v.created_at)}</div>
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      {snap?.quote?.total != null && (
+                        <span className="text-sm text-gray-500">{formatCurrency(snap.quote.total, quote.currency)}</span>
+                      )}
+                      <button
+                        onClick={() => handleRestoreVersion(v)}
+                        disabled={restoring === v.id}
+                        className="flex items-center gap-1 text-xs text-amber-500 hover:text-amber-600 font-medium transition-colors disabled:opacity-50"
+                      >
+                        {restoring === v.id ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
+                        Restore
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Send Proposal Modal ── */}
       {showSendModal && (

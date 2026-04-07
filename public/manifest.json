@@ -1,0 +1,26 @@
+{
+  "name": "NorthQuote",
+  "short_name": "NorthQuote",
+  "description": "AI-powered quoting for Canadian tradespeople",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#0F1C2E",
+  "theme_color": "#0F1C2E",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "screenshots": []
+}

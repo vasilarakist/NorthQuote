@@ -7,7 +7,7 @@ import type { Client, Project, PriceBookItem } from '@/types/database'
 import { LineItemsEditor, type LineItemDraft, newLineItem } from '@/components/ui/LineItemsEditor'
 import { getTaxInfo, calcLineTotal } from '@/lib/taxes'
 import { formatCurrency, CANADIAN_PROVINCES, US_STATES } from '@/lib/utils'
-import { Sparkles, Loader2, Plus, X, ChevronDown, Wand2 } from 'lucide-react'
+import { Sparkles, Loader2, Plus, X, ChevronDown, Wand2, Layers } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -51,8 +51,22 @@ export function QuoteBuilderClient({
   const [internalNotes, setInternalNotes] = useState('')
   const [validUntil, setValidUntil] = useState(defaultValidUntil)
 
-  // Line items
+  // Quote mode
+  const [tieredMode, setTieredMode] = useState(false)
+  const [activeTier, setActiveTier] = useState<'good' | 'better' | 'best'>('good')
+
+  // Line items — single mode
   const [lineItems, setLineItems] = useState<LineItemDraft[]>([])
+
+  // Line items — tiered mode (one set per tier)
+  const [goodItems, setGoodItems] = useState<LineItemDraft[]>([])
+  const [betterItems, setBetterItems] = useState<LineItemDraft[]>([])
+  const [bestItems, setBestItems] = useState<LineItemDraft[]>([])
+
+  // Notes per tier
+  const [goodNotes, setGoodNotes] = useState('')
+  const [betterNotes, setBetterNotes] = useState('')
+  const [bestNotes, setBestNotes] = useState('')
 
   // AI state
   const [aiLoading, setAiLoading] = useState(false)
@@ -90,6 +104,23 @@ export function QuoteBuilderClient({
   )
   const taxAmount = subtotal * taxInfo.rate
   const total = subtotal + taxAmount
+
+  // Tiered totals
+  const tierData = useMemo(() => {
+    const calc = (items: LineItemDraft[]) => {
+      const sub = items.reduce((s, i) => s + i.total, 0)
+      const tax = sub * taxInfo.rate
+      return { subtotal: sub, taxAmount: tax, total: sub + tax }
+    }
+    return {
+      good: calc(goodItems),
+      better: calc(betterItems),
+      best: calc(bestItems),
+    }
+  }, [goodItems, betterItems, bestItems, taxInfo.rate])
+
+  const activeTierItems = activeTier === 'good' ? goodItems : activeTier === 'better' ? betterItems : bestItems
+  const setActiveTierItems = activeTier === 'good' ? setGoodItems : activeTier === 'better' ? setBetterItems : setBestItems
 
   // ─── AI Generate Quote ────────────────────────────────────────
   async function handleGenerateAI() {
@@ -216,6 +247,62 @@ export function QuoteBuilderClient({
     setProjectCreating(false)
   }
 
+  // ─── Save single quote ────────────────────────────────────────
+  async function saveSingleQuote(supabase: ReturnType<typeof createClient>, quoteNumber: string, status: 'draft' | 'sent', items: LineItemDraft[], notes: string, tierName: 'single' | 'good' | 'better' | 'best') {
+    const sub = items.reduce((s, i) => s + i.total, 0)
+    const tax = sub * taxInfo.rate
+    const tot = sub + tax
+
+    const { data: quote, error: quoteErr } = await supabase
+      .from('quotes')
+      .insert({
+        organization_id: organizationId,
+        project_id: projectId,
+        client_id: clientId,
+        quote_number: quoteNumber,
+        version: 1,
+        status,
+        tier: tierName,
+        subtotal: sub,
+        tax_amount: tax,
+        tax_rate: taxInfo.rate,
+        tax_type: taxInfo.type,
+        total: tot,
+        currency: 'CAD',
+        valid_until: validUntil || null,
+        ai_generated: items.some((i) => i.ai_generated),
+        ai_prompt: jobDescription || null,
+        notes_to_client: notes || null,
+        internal_notes: internalNotes || null,
+        sent_at: status === 'sent' ? new Date().toISOString() : null,
+      })
+      .select()
+      .single()
+
+    if (quoteErr || !quote) throw new Error(quoteErr?.message ?? 'Failed to save quote.')
+
+    const lineItemsPayload = items.map((item, idx) => ({
+      quote_id: quote.id, position: idx,
+      description: item.description, category: item.category,
+      quantity: item.quantity, unit: item.unit,
+      unit_price: item.unit_price, markup_percent: item.markup_percent,
+      total: item.total, from_price_book: false,
+    }))
+
+    if (lineItemsPayload.length) {
+      const { error: liErr } = await supabase.from('quote_line_items').insert(lineItemsPayload)
+      if (liErr) throw new Error(liErr.message)
+    }
+
+    await supabase.from('quote_versions').insert({
+      quote_id: quote.id,
+      version_number: 1,
+      snapshot: { quote, line_items: lineItemsPayload },
+    })
+
+    return quote
+  }
+
   // ─── Save Quote ───────────────────────────────────────────────
   const handleSave = useCallback(
     async (status: 'draft' | 'sent') => {
@@ -223,94 +310,49 @@ export function QuoteBuilderClient({
         setSaveError('Please select a client and project.')
         return
       }
-      if (!lineItems.length) {
+
+      if (tieredMode) {
+        if (!goodItems.length || !betterItems.length || !bestItems.length) {
+          setSaveError('Add at least one line item to each tier (Good, Better, Best).')
+          return
+        }
+      } else if (!lineItems.length) {
         setSaveError('Add at least one line item.')
         return
       }
+
       setSaveError('')
       setSaving(true)
 
-      const supabase = createClient()
+      try {
+        const supabase = createClient()
 
-      // Generate quote number
-      const { count } = await supabase
-        .from('quotes')
-        .select('*', { count: 'exact', head: true })
-        .eq('organization_id', organizationId)
+        const { count } = await supabase
+          .from('quotes')
+          .select('*', { count: 'exact', head: true })
+          .eq('organization_id', organizationId)
 
-      const now = new Date()
-      const quoteNumber = `Q-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${String((count ?? 0) + 1).padStart(4, '0')}`
+        const now = new Date()
+        const baseNumber = `Q-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${String((count ?? 0) + 1).padStart(4, '0')}`
 
-      // Build totals
-      const sub = lineItems.reduce((s, i) => s + i.total, 0)
-      const tax = sub * taxInfo.rate
-      const tot = sub + tax
-
-      const { data: quote, error: quoteErr } = await supabase
-        .from('quotes')
-        .insert({
-          organization_id: organizationId,
-          project_id: projectId,
-          client_id: clientId,
-          quote_number: quoteNumber,
-          version: 1,
-          status,
-          tier: 'single',
-          subtotal: sub,
-          tax_amount: tax,
-          tax_rate: taxInfo.rate,
-          tax_type: taxInfo.type,
-          total: tot,
-          currency: 'CAD',
-          valid_until: validUntil || null,
-          ai_generated: lineItems.some((i) => i.ai_generated),
-          ai_prompt: jobDescription || null,
-          notes_to_client: notesToClient || null,
-          internal_notes: internalNotes || null,
-          sent_at: status === 'sent' ? new Date().toISOString() : null,
-        })
-        .select()
-        .single()
-
-      if (quoteErr || !quote) {
-        setSaveError(quoteErr?.message ?? 'Failed to save quote.')
+        if (tieredMode) {
+          const goodQuote = await saveSingleQuote(supabase, `${baseNumber}-G`, status, goodItems, goodNotes, 'good')
+          await saveSingleQuote(supabase, `${baseNumber}-B`, status, betterItems, betterNotes, 'better')
+          await saveSingleQuote(supabase, `${baseNumber}-X`, status, bestItems, bestNotes, 'best')
+          router.push(`/quotes/${goodQuote.id}`)
+        } else {
+          const quote = await saveSingleQuote(supabase, baseNumber, status, lineItems, notesToClient, 'single')
+          router.push(`/quotes/${quote.id}`)
+        }
+      } catch (err) {
+        setSaveError(err instanceof Error ? err.message : 'Failed to save.')
         setSaving(false)
-        return
       }
-
-      // Insert line items
-      const lineItemsPayload = lineItems.map((item, idx) => ({
-        quote_id: quote.id,
-        position: idx,
-        description: item.description,
-        category: item.category,
-        quantity: item.quantity,
-        unit: item.unit,
-        unit_price: item.unit_price,
-        markup_percent: item.markup_percent,
-        total: item.total,
-        from_price_book: false,
-      }))
-
-      const { error: liErr } = await supabase.from('quote_line_items').insert(lineItemsPayload)
-      if (liErr) {
-        setSaveError(liErr.message)
-        setSaving(false)
-        return
-      }
-
-      // Save version snapshot
-      await supabase.from('quote_versions').insert({
-        quote_id: quote.id,
-        version_number: 1,
-        snapshot: { quote, line_items: lineItemsPayload },
-      })
-
-      router.push(`/quotes/${quote.id}`)
     },
     [
-      clientId, projectId, lineItems, organizationId,
-      taxInfo, validUntil, jobDescription, notesToClient, internalNotes, router,
+      clientId, projectId, lineItems, goodItems, betterItems, bestItems,
+      goodNotes, betterNotes, bestNotes, tieredMode,
+      organizationId, taxInfo, validUntil, jobDescription, notesToClient, internalNotes, router,
     ]
   )
 
@@ -327,6 +369,31 @@ export function QuoteBuilderClient({
           {saveError}
         </div>
       )}
+
+      {/* ── Quote Mode Toggle ── */}
+      <div className="card">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="font-semibold text-gray-900">Quote Type</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {tieredMode ? 'Create 3 tiers — client picks the one that fits' : 'Single quote for the job'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setTieredMode((v) => !v)}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all',
+              tieredMode
+                ? 'border-amber-500 bg-amber-50 text-amber-700'
+                : 'border-gray-200 text-gray-600 hover:border-gray-300'
+            )}
+          >
+            <Layers size={15} />
+            {tieredMode ? 'Tiered (Good / Better / Best)' : 'Single Quote'}
+          </button>
+        </div>
+      </div>
 
       {/* ── Client & Project ── */}
       <div className="card space-y-4">
@@ -427,23 +494,98 @@ export function QuoteBuilderClient({
       </div>
 
       {/* ── Line Items ── */}
-      <div className="card space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-gray-900">Line Items</h2>
-          <button
-            type="button"
-            onClick={() => setLineItems((prev) => [...prev, newLineItem()])}
-            className="btn-secondary text-xs px-3 py-2"
-          >
-            <Plus size={13} /> Add row
-          </button>
+      {tieredMode ? (
+        <div className="card space-y-4">
+          {/* Tier tabs */}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+            {(['good', 'better', 'best'] as const).map((tier) => {
+              const labels: Record<string, { label: string; sub: string; color: string }> = {
+                good:   { label: 'Good',   sub: formatCurrency(tierData.good.total),   color: 'text-gray-700' },
+                better: { label: 'Better', sub: formatCurrency(tierData.better.total), color: 'text-navy-900' },
+                best:   { label: 'Best',   sub: formatCurrency(tierData.best.total),   color: 'text-amber-600' },
+              }
+              const isActive = activeTier === tier
+              return (
+                <button
+                  key={tier}
+                  type="button"
+                  onClick={() => setActiveTier(tier)}
+                  className={cn(
+                    'flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all text-center',
+                    isActive ? 'bg-white shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  )}
+                >
+                  <div className={cn('font-semibold', isActive ? labels[tier].color : 'text-gray-600')}>
+                    {labels[tier].label}
+                    {tier === 'better' && <span className="ml-1 text-xs bg-amber-500 text-white rounded-full px-1.5 py-0.5">★ Rec.</span>}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-0.5">{labels[tier].sub}</div>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-gray-900 capitalize">{activeTier} — Line Items</h2>
+            <button
+              type="button"
+              onClick={() => setActiveTierItems((prev) => [...prev, newLineItem()])}
+              className="btn-secondary text-xs px-3 py-2"
+            >
+              <Plus size={13} /> Add row
+            </button>
+          </div>
+          <LineItemsEditor items={activeTierItems} onChange={setActiveTierItems} />
+
+          {/* Tier totals summary */}
+          <div className="grid grid-cols-3 gap-3 pt-2 border-t border-gray-100">
+            {(['good', 'better', 'best'] as const).map((tier) => (
+              <div key={tier} className={cn('text-center p-3 rounded-lg', activeTier === tier ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50')}>
+                <div className="text-xs text-gray-500 capitalize mb-1">{tier}</div>
+                <div className="text-sm font-semibold text-navy-900">{formatCurrency(tierData[tier].total)}</div>
+              </div>
+            ))}
+          </div>
         </div>
-        <LineItemsEditor items={lineItems} onChange={setLineItems} />
-      </div>
+      ) : (
+        <div className="card space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-gray-900">Line Items</h2>
+            <button
+              type="button"
+              onClick={() => setLineItems((prev) => [...prev, newLineItem()])}
+              className="btn-secondary text-xs px-3 py-2"
+            >
+              <Plus size={13} /> Add row
+            </button>
+          </div>
+          <LineItemsEditor items={lineItems} onChange={setLineItems} />
+        </div>
+      )}
 
       {/* ── Notes & Options ── */}
       <div className="card space-y-4">
         <h2 className="font-semibold text-gray-900">Quote Options</h2>
+        {tieredMode ? (
+          <div className="space-y-4">
+            {(['good', 'better', 'best'] as const).map((tier) => {
+              const val = tier === 'good' ? goodNotes : tier === 'better' ? betterNotes : bestNotes
+              const setter = tier === 'good' ? setGoodNotes : tier === 'better' ? setBetterNotes : setBestNotes
+              return (
+                <div key={tier}>
+                  <label className="label capitalize">{tier} — Notes to client</label>
+                  <textarea
+                    value={val}
+                    onChange={(e) => setter(e.target.value)}
+                    className="input resize-none"
+                    rows={2}
+                    placeholder={`Describe what's included in the ${tier} option…`}
+                  />
+                </div>
+              )
+            })}
+          </div>
+        ) : (
         <div>
           <div className="flex items-center justify-between mb-1">
             <label className="label mb-0">Notes to client</label>
@@ -465,6 +607,7 @@ export function QuoteBuilderClient({
             placeholder="Visible to the client on the quote PDF…"
           />
         </div>
+        )}
         <div>
           <label className="label">Internal notes <span className="text-gray-400 font-normal">(not shown to client)</span></label>
           <textarea
@@ -487,21 +630,48 @@ export function QuoteBuilderClient({
       </div>
 
       {/* ── Totals ── */}
-      <div className="card ml-auto max-w-sm space-y-2">
-        <h2 className="font-semibold text-gray-900 mb-3">Summary</h2>
-        <div className="flex justify-between text-sm text-gray-600">
-          <span>Subtotal</span>
-          <span>{formatCurrency(subtotal)}</span>
+      {tieredMode ? (
+        <div className="card space-y-3">
+          <h2 className="font-semibold text-gray-900">Tier Summary</h2>
+          <div className="grid grid-cols-3 gap-4">
+            {(['good', 'better', 'best'] as const).map((tier) => (
+              <div key={tier} className={cn('rounded-xl p-4 border-2', tier === 'better' ? 'border-amber-500 bg-amber-50' : 'border-gray-200')}>
+                <div className="text-xs text-gray-500 capitalize mb-2 font-medium flex items-center gap-1">
+                  {tier}
+                  {tier === 'better' && <span className="text-amber-500">★</span>}
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>Subtotal</span><span>{formatCurrency(tierData[tier].subtotal)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>{taxInfo.label}</span><span>{formatCurrency(tierData[tier].taxAmount)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm font-bold text-navy-900 pt-1 border-t border-gray-200">
+                    <span>Total</span><span>{formatCurrency(tierData[tier].total)}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex justify-between text-sm text-gray-600">
-          <span>{taxInfo.label}</span>
-          <span>{formatCurrency(taxAmount)}</span>
+      ) : (
+        <div className="card ml-auto max-w-sm space-y-2">
+          <h2 className="font-semibold text-gray-900 mb-3">Summary</h2>
+          <div className="flex justify-between text-sm text-gray-600">
+            <span>Subtotal</span>
+            <span>{formatCurrency(subtotal)}</span>
+          </div>
+          <div className="flex justify-between text-sm text-gray-600">
+            <span>{taxInfo.label}</span>
+            <span>{formatCurrency(taxAmount)}</span>
+          </div>
+          <div className="flex justify-between text-base font-semibold text-gray-900 pt-2 border-t border-gray-200">
+            <span>Total (CAD)</span>
+            <span>{formatCurrency(total)}</span>
+          </div>
         </div>
-        <div className="flex justify-between text-base font-semibold text-gray-900 pt-2 border-t border-gray-200">
-          <span>Total (CAD)</span>
-          <span>{formatCurrency(total)}</span>
-        </div>
-      </div>
+      )}
 
       {/* ── Sticky Action Bar ── */}
       <div className="fixed bottom-0 left-0 right-0 lg:left-60 bg-white border-t border-gray-200 px-6 py-3 flex items-center justify-between gap-4 z-20">
@@ -513,9 +683,11 @@ export function QuoteBuilderClient({
           Cancel
         </button>
         <div className="flex items-center gap-3">
-          <div className="text-sm text-gray-500 hidden sm:block">
-            Total: <span className="font-semibold text-gray-900">{formatCurrency(total)}</span>
-          </div>
+          {!tieredMode && (
+            <div className="text-sm text-gray-500 hidden sm:block">
+              Total: <span className="font-semibold text-gray-900">{formatCurrency(total)}</span>
+            </div>
+          )}
           <button
             type="button"
             onClick={() => handleSave('draft')}

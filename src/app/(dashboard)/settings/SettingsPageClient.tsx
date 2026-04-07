@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import type { Organization, FollowUpSettings } from '@/types/database'
 import { CANADIAN_PROVINCES, US_STATES, TRADE_TYPES } from '@/lib/utils'
-import { Building2, User, Tag, CreditCard, Bell, CheckCircle2, Loader2, ExternalLink } from 'lucide-react'
+import { Building2, User, Tag, CreditCard, Bell, CheckCircle2, Loader2, ExternalLink, Download, FileSpreadsheet } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -56,6 +56,49 @@ export function SettingsPageClient({ organization, user }: Props) {
   // Stripe Connect
   const [stripeLoading, setStripeLoading] = useState(false)
   const stripeConnected = stripeConnectedParam || Boolean(organization?.stripe_account_id)
+
+  // Exports
+  const [qbLoading, setQbLoading] = useState(false)
+  const [dataLoading, setDataLoading] = useState(false)
+  const [exportError, setExportError] = useState('')
+
+  async function handleQbExport() {
+    setQbLoading(true)
+    setExportError('')
+    const res = await fetch('/api/export/quickbooks')
+    if (res.ok) {
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = res.headers.get('Content-Disposition')?.split('filename="')[1]?.replace('"', '') ?? 'quickbooks-export.csv'
+      a.click()
+      URL.revokeObjectURL(url)
+    } else {
+      const data = await res.json()
+      setExportError(data.error ?? 'Export failed.')
+    }
+    setQbLoading(false)
+  }
+
+  async function handleDataExport() {
+    setDataLoading(true)
+    setExportError('')
+    const res = await fetch('/api/export/data')
+    if (res.ok) {
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = res.headers.get('Content-Disposition')?.split('filename="')[1]?.replace('"', '') ?? 'northquote-export.zip'
+      a.click()
+      URL.revokeObjectURL(url)
+    } else {
+      const data = await res.json()
+      setExportError(data.error ?? 'Export failed.')
+    }
+    setDataLoading(false)
+  }
 
   function handleOrgChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     setOrgForm((prev) => ({ ...prev, [e.target.name]: e.target.value }))
@@ -378,6 +421,68 @@ export function SettingsPageClient({ organization, user }: Props) {
             <div className="input bg-gray-50 text-gray-500 cursor-not-allowed capitalize">{user.role}</div>
           </div>
         </div>
+      </div>
+
+      {/* ── QuickBooks Export ── */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-9 h-9 bg-green-50 rounded-lg flex items-center justify-center">
+            <FileSpreadsheet className="w-5 h-5 text-green-600" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">QuickBooks Export</h2>
+            <p className="text-xs text-gray-500">Download paid invoices formatted for QuickBooks import</p>
+          </div>
+        </div>
+        {exportError && (
+          <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 mb-4">{exportError}</div>
+        )}
+        <div className="rounded-lg bg-gray-50 border border-gray-200 p-4 text-sm text-gray-600 mb-4">
+          <p className="font-medium text-gray-900 mb-1">What&apos;s included:</p>
+          <ul className="list-disc list-inside space-y-0.5 text-gray-500 text-xs">
+            <li>All paid invoices with line items</li>
+            <li>Customer names, dates, amounts, and tax</li>
+            <li>Ready for QuickBooks Online CSV import</li>
+            <li>Drafts and estimates are excluded</li>
+          </ul>
+        </div>
+        <button
+          onClick={handleQbExport}
+          disabled={qbLoading}
+          className="btn-secondary"
+        >
+          {qbLoading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+          {qbLoading ? 'Exporting…' : 'Export for QuickBooks'}
+        </button>
+      </div>
+
+      {/* ── Data Export ── */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-9 h-9 bg-blue-50 rounded-lg flex items-center justify-center">
+            <Download className="w-5 h-5 text-blue-600" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">Export All Data</h2>
+            <p className="text-xs text-gray-500">Download everything — clients, quotes, and invoices as CSV files</p>
+          </div>
+        </div>
+        <div className="rounded-lg bg-gray-50 border border-gray-200 p-4 text-sm text-gray-600 mb-4">
+          <p className="font-medium text-gray-900 mb-1">You&apos;ll receive a .zip containing:</p>
+          <ul className="list-disc list-inside space-y-0.5 text-gray-500 text-xs">
+            <li>clients.csv — all client records</li>
+            <li>quotes.csv — all quotes with status and totals</li>
+            <li>invoices.csv — all invoices with payment info</li>
+          </ul>
+        </div>
+        <button
+          onClick={handleDataExport}
+          disabled={dataLoading}
+          className="btn-primary"
+        >
+          {dataLoading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+          {dataLoading ? 'Preparing download…' : 'Download All Data'}
+        </button>
       </div>
 
       {/* ── Referral ── */}

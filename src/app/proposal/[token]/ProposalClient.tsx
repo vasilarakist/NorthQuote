@@ -256,30 +256,47 @@ export function ProposalClient({ quote, org, client, project, lineItems, tierQuo
           </div>
         )}
 
-        {/* Tier toggle */}
+        {/* Tier comparison cards */}
         {tierQuotes.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-3">Choose your option</p>
-            <div className="grid grid-cols-3 gap-2">
-              {tierQuotes.map((tq) => (
-                <button
-                  key={tq.id}
-                  onClick={() => {
-                    setSelectedTier(tq.tier)
-                    if (tq.proposal_token) window.location.href = `/proposal/${tq.proposal_token}`
-                  }}
-                  className={cn(
-                    'rounded-lg p-3 text-center border-2 transition-all',
-                    selectedTier === tq.tier
-                      ? 'border-current text-white'
-                      : 'border-gray-200 text-gray-700 hover:border-gray-300'
-                  )}
-                  style={selectedTier === tq.tier ? { borderColor: accent, backgroundColor: accent } : {}}
-                >
-                  <div className="font-semibold text-sm">{TIER_LABELS[tq.tier] ?? tq.tier}</div>
-                  <div className="text-xs mt-0.5 opacity-80">{formatCurrency(tq.total)}</div>
-                </button>
-              ))}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Choose your option</p>
+            <div className="grid grid-cols-3 gap-3">
+              {tierQuotes.map((tq) => {
+                const isRecommended = tq.tier === 'better'
+                const isSelected = selectedTier === tq.tier
+                return (
+                  <button
+                    key={tq.id}
+                    onClick={() => {
+                      setSelectedTier(tq.tier)
+                      if (tq.proposal_token) window.location.href = `/proposal/${tq.proposal_token}`
+                    }}
+                    className={cn(
+                      'relative rounded-xl p-4 text-center border-2 transition-all text-left',
+                      isSelected
+                        ? 'shadow-md'
+                        : 'border-gray-200 hover:border-gray-300 bg-white'
+                    )}
+                    style={isSelected ? { borderColor: accent, backgroundColor: 'white' } : {}}
+                  >
+                    {isRecommended && (
+                      <div
+                        className="absolute -top-2.5 left-1/2 -translate-x-1/2 text-white text-xs font-semibold px-2.5 py-0.5 rounded-full whitespace-nowrap"
+                        style={{ backgroundColor: accent }}
+                      >
+                        ★ Recommended
+                      </div>
+                    )}
+                    <div className="font-bold text-gray-900 mt-1 text-sm">{TIER_LABELS[tq.tier] ?? tq.tier}</div>
+                    <div className="text-lg font-bold mt-1" style={{ color: isSelected ? accent : primary }}>
+                      {formatCurrency(tq.total)}
+                    </div>
+                    {isSelected && (
+                      <div className="mt-2 text-xs font-medium" style={{ color: accent }}>Selected ✓</div>
+                    )}
+                  </button>
+                )
+              })}
             </div>
           </div>
         )}

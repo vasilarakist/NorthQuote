@@ -18,7 +18,7 @@ export default async function QuoteDetailPage({ params }: { params: Promise<{ id
   const orgRaw = userRecord.organizations
   const org = (Array.isArray(orgRaw) ? orgRaw[0] : orgRaw) as { province_state: string | null } | null
 
-  const [{ data: quote }, { data: lineItems }] = await Promise.all([
+  const [{ data: quote }, { data: lineItems }, { data: versions }] = await Promise.all([
     supabase
       .from('quotes')
       .select('*, clients(name, email, phone), projects(project_name, service_address)')
@@ -30,6 +30,11 @@ export default async function QuoteDetailPage({ params }: { params: Promise<{ id
       .select('*')
       .eq('quote_id', id)
       .order('position'),
+    supabase
+      .from('quote_versions')
+      .select('*')
+      .eq('quote_id', id)
+      .order('version_number', { ascending: false }),
   ])
 
   if (!quote) notFound()
@@ -44,6 +49,7 @@ export default async function QuoteDetailPage({ params }: { params: Promise<{ id
       quote={{ ...quote, clients: clientData, projects: projectData }}
       lineItems={lineItems ?? []}
       provinceState={org?.province_state ?? 'ON'}
+      versions={versions ?? []}
     />
   )
 }

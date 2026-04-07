@@ -15,6 +15,8 @@ import {
   X,
   LogOut,
   ChevronRight,
+  BarChart2,
+  Gift,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
@@ -27,6 +29,8 @@ const NAV_ITEMS = [
   { href: '/projects', label: 'Projects', icon: FolderOpen },
   { href: '/price-book', label: 'Price Book', icon: BookOpen },
   { href: '/invoices', label: 'Invoices', icon: Receipt },
+  { href: '/analytics', label: 'Analytics', icon: BarChart2 },
+  { href: '/referrals', label: 'Referrals', icon: Gift },
   { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
