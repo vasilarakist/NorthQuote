@@ -30,8 +30,17 @@ export interface Organization {
   subscription_status: SubscriptionStatus | null
   subscription_plan: SubscriptionPlan | null
   referral_code: string | null
+  follow_up_settings: FollowUpSettings | null
   created_at: string
   updated_at: string
+}
+
+export interface FollowUpSettings {
+  quote_not_opened_hours: number
+  quote_not_accepted_hours: number
+  invoice_overdue_days: number
+  sms_enabled: boolean
+  email_enabled: boolean
 }
 
 export interface User {
@@ -99,6 +108,7 @@ export interface Quote {
   declined_at: string | null
   signature_data: string | null
   signature_ip: string | null
+  proposal_token: string | null
   created_at: string
   updated_at: string
   // joined
@@ -160,9 +170,12 @@ export interface Invoice {
   total: number
   currency: string
   due_date: string | null
+  invoice_date: string | null
   paid_at: string | null
   stripe_payment_intent_id: string | null
   payment_method: string | null
+  line_items: QuoteLineItem[] | null
+  notes_to_client: string | null
   created_at: string
   updated_at: string
 }

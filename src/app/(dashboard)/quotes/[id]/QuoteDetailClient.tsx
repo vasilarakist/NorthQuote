@@ -10,7 +10,8 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import {
   Pencil, Check, X, Loader2, Copy, Trash2, ArrowLeft,
-  User, FolderOpen, Calendar, Sparkles,
+  User, FolderOpen, Calendar, Sparkles, Send, Receipt,
+  Link2, MessageSquare, Plus, CheckCircle2,
 } from 'lucide-react'
 
 interface Props {
@@ -56,13 +57,29 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
   const [saveError, setSaveError] = useState('')
   const [deleting, setDeleting] = useState(false)
 
-  const taxInfo = getTaxInfo(provinceState)
+  // Send modal state
+  const [showSendModal, setShowSendModal] = useState(false)
+  const [sendEmail, setSendEmail] = useState(true)
+  const [sendSms, setSendSms] = useState(false)
+  const [smsPhone, setSmsPhone] = useState(quote.clients?.phone ?? '')
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState('')
+  const [proposalUrl, setProposalUrl] = useState<string | null>(
+    quote.proposal_token ? `${process.env.NEXT_PUBLIC_APP_URL}/proposal/${quote.proposal_token}` : null
+  )
+  const [copied, setCopied] = useState(false)
 
+  // Convert to invoice state
+  const [converting, setConverting] = useState(false)
+
+  const taxInfo = getTaxInfo(provinceState)
   const subtotal = useMemo(() => lineItems.reduce((s, i) => s + i.total, 0), [lineItems])
   const taxAmount = subtotal * taxInfo.rate
   const total = subtotal + taxAmount
 
   const canEdit = quote.status === 'draft' || quote.status === 'sent'
+  const canSend = quote.status === 'draft' || quote.status === 'sent' || quote.status === 'viewed'
+  const canConvert = quote.status === 'accepted'
 
   // ─── Save edits ───────────────────────────────────────────────
   async function handleSaveEdits() {
@@ -70,38 +87,24 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
     setSaving(true)
     const supabase = createClient()
 
-    // Delete existing line items and re-insert
     const { error: delErr } = await supabase.from('quote_line_items').delete().eq('quote_id', quote.id)
     if (delErr) { setSaveError(delErr.message); setSaving(false); return }
 
     const newItems = lineItems.map((item, idx) => ({
-      quote_id: quote.id,
-      position: idx,
-      description: item.description,
-      category: item.category,
-      quantity: item.quantity,
-      unit: item.unit,
-      unit_price: item.unit_price,
-      markup_percent: item.markup_percent,
-      total: item.total,
-      from_price_book: false,
+      quote_id: quote.id, position: idx,
+      description: item.description, category: item.category,
+      quantity: item.quantity, unit: item.unit,
+      unit_price: item.unit_price, markup_percent: item.markup_percent,
+      total: item.total, from_price_book: false,
     }))
     const { error: insErr } = await supabase.from('quote_line_items').insert(newItems)
     if (insErr) { setSaveError(insErr.message); setSaving(false); return }
 
-    const { error: qErr } = await supabase
-      .from('quotes')
-      .update({
-        subtotal,
-        tax_amount: taxAmount,
-        tax_rate: taxInfo.rate,
-        tax_type: taxInfo.type,
-        total,
-        notes_to_client: notesToClient || null,
-        internal_notes: internalNotes || null,
-        valid_until: validUntil || null,
-      })
-      .eq('id', quote.id)
+    const { error: qErr } = await supabase.from('quotes').update({
+      subtotal, tax_amount: taxAmount, tax_rate: taxInfo.rate, tax_type: taxInfo.type,
+      total, notes_to_client: notesToClient || null,
+      internal_notes: internalNotes || null, valid_until: validUntil || null,
+    }).eq('id', quote.id)
     if (qErr) { setSaveError(qErr.message); setSaving(false); return }
 
     setSaving(false)
@@ -118,54 +121,81 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
     setSaveError('')
   }
 
+  // ─── Send proposal ────────────────────────────────────────────
+  async function handleSend() {
+    if (!sendEmail && !sendSms) {
+      setSendError('Choose at least one delivery method.')
+      return
+    }
+    setSendError('')
+    setSending(true)
+    const res = await fetch('/api/proposals/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        quote_id: quote.id,
+        send_email: sendEmail,
+        send_sms: sendSms,
+        client_phone_override: smsPhone || null,
+      }),
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      setSendError(data.error ?? 'Send failed.')
+      setSending(false)
+      return
+    }
+    setProposalUrl(data.proposal_url)
+    setSending(false)
+    router.refresh()
+  }
+
+  function copyUrl() {
+    if (proposalUrl) {
+      navigator.clipboard.writeText(proposalUrl)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
+  // ─── Convert to Invoice ───────────────────────────────────────
+  async function handleConvertToInvoice() {
+    setConverting(true)
+    const res = await fetch('/api/invoices/convert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quote_id: quote.id }),
+    })
+    const data = await res.json()
+    if (res.ok && data.invoice_id) {
+      router.push(`/invoices/${data.invoice_id}`)
+    }
+    setConverting(false)
+  }
+
   // ─── Duplicate ────────────────────────────────────────────────
   async function handleDuplicate() {
     const supabase = createClient()
     const { count } = await supabase
-      .from('quotes')
-      .select('*', { count: 'exact', head: true })
+      .from('quotes').select('*', { count: 'exact', head: true })
       .eq('organization_id', quote.organization_id)
-
     const now = new Date()
-    const newQuoteNumber = `Q-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${String((count ?? 0) + 1).padStart(4, '0')}`
-
-    const { data: newQuote, error } = await supabase
-      .from('quotes')
-      .insert({
-        organization_id: quote.organization_id,
-        project_id: quote.project_id,
-        client_id: quote.client_id,
-        quote_number: newQuoteNumber,
-        version: 1,
-        status: 'draft',
-        tier: quote.tier,
-        subtotal: quote.subtotal,
-        tax_amount: quote.tax_amount,
-        tax_rate: quote.tax_rate,
-        tax_type: quote.tax_type,
-        total: quote.total,
-        currency: quote.currency,
-        valid_until: quote.valid_until,
-        ai_generated: quote.ai_generated,
-        ai_prompt: quote.ai_prompt,
-        notes_to_client: quote.notes_to_client,
-        internal_notes: quote.internal_notes,
-      })
-      .select()
-      .single()
-
-    if (!error && newQuote) {
+    const newNumber = `Q-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${String((count ?? 0) + 1).padStart(4, '0')}`
+    const { data: newQuote } = await supabase.from('quotes').insert({
+      organization_id: quote.organization_id, project_id: quote.project_id,
+      client_id: quote.client_id, quote_number: newNumber, version: 1, status: 'draft',
+      tier: quote.tier, subtotal: quote.subtotal, tax_amount: quote.tax_amount,
+      tax_rate: quote.tax_rate, tax_type: quote.tax_type, total: quote.total,
+      currency: quote.currency, valid_until: quote.valid_until, ai_generated: quote.ai_generated,
+      ai_prompt: quote.ai_prompt, notes_to_client: quote.notes_to_client,
+      internal_notes: quote.internal_notes,
+    }).select().single()
+    if (newQuote) {
       const dupItems = initialLineItems.map((item, idx) => ({
-        quote_id: newQuote.id,
-        position: idx,
-        description: item.description,
-        category: item.category,
-        quantity: item.quantity,
-        unit: item.unit,
-        unit_price: item.unit_price,
-        markup_percent: item.markup_percent,
-        total: item.total,
-        from_price_book: item.from_price_book,
+        quote_id: newQuote.id, position: idx, description: item.description,
+        category: item.category, quantity: item.quantity, unit: item.unit,
+        unit_price: item.unit_price, markup_percent: item.markup_percent,
+        total: item.total, from_price_book: item.from_price_book,
       }))
       await supabase.from('quote_line_items').insert(dupItems)
       router.push(`/quotes/${newQuote.id}`)
@@ -181,13 +211,6 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
     router.push('/quotes')
   }
 
-  // ─── Mark as Sent ─────────────────────────────────────────────
-  async function handleMarkSent() {
-    const supabase = createClient()
-    await supabase.from('quotes').update({ status: 'sent', sent_at: new Date().toISOString() }).eq('id', quote.id)
-    router.refresh()
-  }
-
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-12">
       {/* Header */}
@@ -197,57 +220,56 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
             <ArrowLeft size={18} />
           </button>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="font-serif text-2xl text-navy-900">{quote.quote_number}</h1>
-              <span className={cn('badge capitalize', STATUS_COLORS[quote.status] ?? 'bg-gray-100 text-gray-600')}>
-                {quote.status}
-              </span>
-              {quote.ai_generated && (
-                <span className="badge bg-amber-100 text-amber-700">
-                  <Sparkles size={10} className="mr-1" /> AI
-                </span>
-              )}
+              <span className={cn('badge capitalize', STATUS_COLORS[quote.status] ?? 'bg-gray-100 text-gray-600')}>{quote.status}</span>
+              {quote.ai_generated && <span className="badge bg-amber-100 text-amber-700"><Sparkles size={10} className="mr-1" /> AI</span>}
             </div>
             <p className="text-gray-500 text-sm mt-0.5">Created {formatDate(quote.created_at)}</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {!editing && canEdit && (
-            <button onClick={() => setEditing(true)} className="btn-secondary">
-              <Pencil size={14} /> Edit
-            </button>
-          )}
+          {!editing && canEdit && <button onClick={() => setEditing(true)} className="btn-secondary"><Pencil size={14} /> Edit</button>}
           {editing && (
             <>
-              <button onClick={handleCancelEdit} className="btn-secondary">
-                <X size={14} /> Cancel
-              </button>
+              <button onClick={handleCancelEdit} className="btn-secondary"><X size={14} /> Cancel</button>
               <button onClick={handleSaveEdits} disabled={saving} className="btn-primary">
-                {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-                Save Changes
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Save Changes
               </button>
             </>
           )}
-          {!editing && quote.status === 'draft' && (
-            <button onClick={handleMarkSent} className="btn-primary">
-              Mark as Sent
+          {!editing && canSend && (
+            <button onClick={() => setShowSendModal(true)} className="btn-primary"><Send size={14} /> Send Proposal</button>
+          )}
+          {!editing && canConvert && (
+            <button onClick={handleConvertToInvoice} disabled={converting} className="btn-amber">
+              {converting ? <Loader2 size={14} className="animate-spin" /> : <Receipt size={14} />} Convert to Invoice
             </button>
           )}
-          <button onClick={handleDuplicate} className="btn-secondary" title="Duplicate">
-            <Copy size={14} />
-          </button>
+          <button onClick={handleDuplicate} className="btn-secondary" title="Duplicate"><Copy size={14} /></button>
           <button onClick={handleDelete} disabled={deleting} className="btn-secondary text-red-500 hover:text-red-600 hover:border-red-300" title="Delete">
             {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
           </button>
         </div>
       </div>
 
-      {saveError && (
-        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{saveError}</div>
+      {saveError && <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{saveError}</div>}
+
+      {/* Proposal URL banner (if sent) */}
+      {proposalUrl && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <Link2 size={15} className="text-blue-500 flex-shrink-0" />
+            <span className="text-sm text-blue-700 truncate">{proposalUrl}</span>
+          </div>
+          <button onClick={copyUrl} className="text-xs font-medium text-blue-600 hover:text-blue-800 flex-shrink-0 transition-colors">
+            {copied ? <><CheckCircle2 size={13} className="inline mr-1" />Copied</> : 'Copy link'}
+          </button>
+        </div>
       )}
 
-      {/* Quote meta */}
+      {/* Meta cards */}
       <div className="grid sm:grid-cols-3 gap-4">
         <div className="card flex items-center gap-3">
           <div className="w-9 h-9 bg-navy-50 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -276,12 +298,7 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
           <div>
             <div className="text-xs text-gray-500">Valid until</div>
             {editing ? (
-              <input
-                type="date"
-                value={validUntil}
-                onChange={(e) => setValidUntil(e.target.value)}
-                className="input text-sm py-1 mt-0.5"
-              />
+              <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} className="input text-sm py-1 mt-0.5" />
             ) : (
               <div className="font-medium text-gray-900">{validUntil ? formatDate(validUntil) : '—'}</div>
             )}
@@ -294,21 +311,12 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
         <div className="flex items-center justify-between">
           <h2 className="font-semibold text-gray-900">Line Items</h2>
           {editing && (
-            <button
-              type="button"
-              onClick={() => setLineItems((prev) => [...prev, newLineItem()])}
-              className="btn-secondary text-xs px-3 py-2"
-            >
+            <button type="button" onClick={() => setLineItems((prev) => [...prev, newLineItem()])} className="btn-secondary text-xs px-3 py-2">
               <Plus size={13} /> Add row
             </button>
           )}
         </div>
-        <LineItemsEditor
-          items={lineItems}
-          onChange={setLineItems}
-          readOnly={!editing}
-          currency={quote.currency}
-        />
+        <LineItemsEditor items={lineItems} onChange={setLineItems} readOnly={!editing} currency={quote.currency} />
       </div>
 
       {/* Notes */}
@@ -318,12 +326,7 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
             <div className="card">
               <h3 className="font-semibold text-gray-900 mb-2 text-sm">Notes to client</h3>
               {editing ? (
-                <textarea
-                  value={notesToClient}
-                  onChange={(e) => setNotesToClient(e.target.value)}
-                  className="input resize-none text-sm"
-                  rows={4}
-                />
+                <textarea value={notesToClient} onChange={(e) => setNotesToClient(e.target.value)} className="input resize-none text-sm" rows={4} />
               ) : (
                 <p className="text-sm text-gray-600 whitespace-pre-wrap">{notesToClient}</p>
               )}
@@ -333,12 +336,7 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
             <div className="card">
               <h3 className="font-semibold text-gray-900 mb-2 text-sm">Internal notes</h3>
               {editing ? (
-                <textarea
-                  value={internalNotes}
-                  onChange={(e) => setInternalNotes(e.target.value)}
-                  className="input resize-none text-sm"
-                  rows={4}
-                />
+                <textarea value={internalNotes} onChange={(e) => setInternalNotes(e.target.value)} className="input resize-none text-sm" rows={4} />
               ) : (
                 <p className="text-sm text-gray-600 whitespace-pre-wrap">{internalNotes}</p>
               )}
@@ -362,9 +360,86 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
           <span>{formatCurrency(editing ? total : quote.total, quote.currency)}</span>
         </div>
       </div>
+
+      {/* ── Send Proposal Modal ── */}
+      {showSendModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setShowSendModal(false)} />
+          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h2 className="font-serif text-lg text-navy-900">Send Proposal</h2>
+              <button onClick={() => setShowSendModal(false)} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-6 space-y-5">
+              {sendError && <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{sendError}</div>}
+
+              {proposalUrl && !sending ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-gray-600">Proposal sent! Share this link with your client:</p>
+                  <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-3">
+                    <Link2 size={14} className="text-gray-400 flex-shrink-0" />
+                    <span className="text-xs text-gray-600 truncate flex-1">{proposalUrl}</span>
+                    <button onClick={copyUrl} className="text-xs font-medium text-navy-900 flex-shrink-0">
+                      {copied ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <button onClick={() => setShowSendModal(false)} className="btn-primary w-full">Done</button>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-3">
+                    {/* Email option */}
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} className="mt-0.5 rounded" />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-gray-900">Send via email</div>
+                        {quote.clients?.email ? (
+                          <div className="text-xs text-gray-500">{quote.clients.email}</div>
+                        ) : (
+                          <div className="text-xs text-amber-600">No email on file for this client</div>
+                        )}
+                      </div>
+                    </label>
+
+                    {/* SMS option */}
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input type="checkbox" checked={sendSms} onChange={(e) => setSendSms(e.target.checked)} className="mt-0.5 rounded" />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-gray-900 flex items-center gap-1">
+                          <MessageSquare size={13} /> Send via SMS
+                        </div>
+                        {sendSms && (
+                          <input
+                            type="tel"
+                            value={smsPhone}
+                            onChange={(e) => setSmsPhone(e.target.value)}
+                            className="input mt-1.5 text-sm"
+                            placeholder="+1 (416) 555-0100"
+                          />
+                        )}
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button onClick={() => setShowSendModal(false)} className="btn-secondary flex-1">Cancel</button>
+                    <button
+                      onClick={handleSend}
+                      disabled={sending || (!sendEmail && !sendSms)}
+                      className="btn-primary flex-1"
+                    >
+                      {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                      {sending ? 'Sending…' : 'Send Proposal'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
-
-// Re-export Plus for use in client component without additional import
-import { Plus } from 'lucide-react'

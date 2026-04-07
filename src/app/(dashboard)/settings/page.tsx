@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { SettingsPageClient } from './SettingsPageClient'
 
@@ -20,9 +21,11 @@ export default async function SettingsPage() {
     .single()
 
   return (
-    <SettingsPageClient
-      organization={org}
-      user={{ ...userRecord, email: user.email ?? '' }}
-    />
+    <Suspense>
+      <SettingsPageClient
+        organization={org}
+        user={{ ...userRecord, email: user.email ?? '' }}
+      />
+    </Suspense>
   )
 }

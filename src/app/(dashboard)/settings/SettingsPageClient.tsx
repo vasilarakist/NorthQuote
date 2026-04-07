@@ -1,10 +1,12 @@
 'use client'
 
 import { useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import type { Organization } from '@/types/database'
+import type { Organization, FollowUpSettings } from '@/types/database'
 import { CANADIAN_PROVINCES, US_STATES, TRADE_TYPES } from '@/lib/utils'
-import { Building2, User, Tag } from 'lucide-react'
+import { Building2, User, Tag, CreditCard, Bell, CheckCircle2, Loader2, ExternalLink } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 interface Props {
   organization: Organization | null
@@ -16,7 +18,18 @@ const PROVINCES_AND_STATES = [
   { group: 'US States', options: US_STATES },
 ]
 
+const DEFAULT_FOLLOW_UP: FollowUpSettings = {
+  quote_not_opened_hours: 24,
+  quote_not_accepted_hours: 72,
+  invoice_overdue_days: 3,
+  sms_enabled: true,
+  email_enabled: true,
+}
+
 export function SettingsPageClient({ organization, user }: Props) {
+  const searchParams = useSearchParams()
+  const stripeConnectedParam = searchParams.get('stripe') === 'connected'
+
   const [orgForm, setOrgForm] = useState({
     name: organization?.name ?? '',
     email: organization?.email ?? '',
@@ -33,6 +46,17 @@ export function SettingsPageClient({ organization, user }: Props) {
   const [orgSuccess, setOrgSuccess] = useState(false)
   const [orgError, setOrgError] = useState('')
 
+  // Follow-up settings
+  const [followUpSettings, setFollowUpSettings] = useState<FollowUpSettings>(
+    organization?.follow_up_settings ?? DEFAULT_FOLLOW_UP
+  )
+  const [fuLoading, setFuLoading] = useState(false)
+  const [fuSuccess, setFuSuccess] = useState(false)
+
+  // Stripe Connect
+  const [stripeLoading, setStripeLoading] = useState(false)
+  const stripeConnected = stripeConnectedParam || Boolean(organization?.stripe_account_id)
+
   function handleOrgChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     setOrgForm((prev) => ({ ...prev, [e.target.name]: e.target.value }))
     setOrgSuccess(false)
@@ -43,34 +67,43 @@ export function SettingsPageClient({ organization, user }: Props) {
     setOrgError('')
     setOrgLoading(true)
     const supabase = createClient()
-    const { error } = await supabase
-      .from('organizations')
-      .update({
-        name: orgForm.name,
-        email: orgForm.email || null,
-        phone: orgForm.phone || null,
-        address: orgForm.address || null,
-        city: orgForm.city || null,
-        province_state: orgForm.province_state || null,
-        postal_zip: orgForm.postal_zip || null,
-        country: orgForm.country,
-        trade_type: orgForm.trade_type || null,
-        gst_hst_number: orgForm.gst_hst_number || null,
-      })
-      .eq('id', user.organization_id)
-
+    const { error } = await supabase.from('organizations').update({
+      name: orgForm.name, email: orgForm.email || null, phone: orgForm.phone || null,
+      address: orgForm.address || null, city: orgForm.city || null,
+      province_state: orgForm.province_state || null, postal_zip: orgForm.postal_zip || null,
+      country: orgForm.country, trade_type: orgForm.trade_type || null,
+      gst_hst_number: orgForm.gst_hst_number || null,
+    }).eq('id', user.organization_id)
     if (error) { setOrgError(error.message) } else { setOrgSuccess(true) }
     setOrgLoading(false)
+  }
+
+  async function handleFollowUpSave(e: React.FormEvent) {
+    e.preventDefault()
+    setFuLoading(true)
+    const supabase = createClient()
+    await supabase.from('organizations').update({ follow_up_settings: followUpSettings }).eq('id', user.organization_id)
+    setFuSuccess(true)
+    setFuLoading(false)
+    setTimeout(() => setFuSuccess(false), 3000)
+  }
+
+  async function handleStripeConnect() {
+    setStripeLoading(true)
+    const res = await fetch('/api/stripe/connect', { method: 'POST' })
+    const data = await res.json()
+    if (data.url) window.location.href = data.url
+    else setStripeLoading(false)
   }
 
   return (
     <div className="max-w-2xl mx-auto space-y-8">
       <div>
         <h1 className="font-serif text-2xl text-navy-900">Settings</h1>
-        <p className="text-gray-500 text-sm mt-0.5">Manage your company profile and account</p>
+        <p className="text-gray-500 text-sm mt-0.5">Manage your company profile and integrations</p>
       </div>
 
-      {/* Company Settings */}
+      {/* ── Company Profile ── */}
       <div className="card">
         <div className="flex items-center gap-3 mb-6">
           <div className="w-9 h-9 bg-navy-50 rounded-lg flex items-center justify-center">
@@ -81,15 +114,9 @@ export function SettingsPageClient({ organization, user }: Props) {
             <p className="text-xs text-gray-500">Appears on all quotes and invoices</p>
           </div>
         </div>
-
         <form onSubmit={handleOrgSave} className="space-y-4">
-          {orgError && (
-            <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{orgError}</div>
-          )}
-          {orgSuccess && (
-            <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">Settings saved successfully.</div>
-          )}
-
+          {orgError && <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{orgError}</div>}
+          {orgSuccess && <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">Settings saved.</div>}
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
               <label className="label">Company name <span className="text-red-500">*</span></label>
@@ -135,9 +162,7 @@ export function SettingsPageClient({ organization, user }: Props) {
                 <option value="">Select…</option>
                 {PROVINCES_AND_STATES.map((group) => (
                   <optgroup key={group.group} label={group.group}>
-                    {group.options.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
+                    {group.options.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                   </optgroup>
                 ))}
               </select>
@@ -147,7 +172,6 @@ export function SettingsPageClient({ organization, user }: Props) {
               <input name="gst_hst_number" type="text" value={orgForm.gst_hst_number} onChange={handleOrgChange} className="input" placeholder="123456789 RT0001" />
             </div>
           </div>
-
           <div className="pt-2">
             <button type="submit" disabled={orgLoading} className="btn-primary">
               {orgLoading ? 'Saving…' : 'Save Changes'}
@@ -156,7 +180,184 @@ export function SettingsPageClient({ organization, user }: Props) {
         </form>
       </div>
 
-      {/* Account Info */}
+      {/* ── Stripe Connect ── */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-9 h-9 bg-purple-50 rounded-lg flex items-center justify-center">
+            <CreditCard className="w-5 h-5 text-purple-600" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">Stripe Payments</h2>
+            <p className="text-xs text-gray-500">Accept payments directly from your proposals</p>
+          </div>
+        </div>
+
+        {stripeConnected ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
+              <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
+              <div>
+                <div className="text-sm font-medium text-green-800">Stripe account connected</div>
+                {organization?.stripe_account_id && (
+                  <div className="text-xs text-green-600 font-mono">{organization.stripe_account_id}</div>
+                )}
+              </div>
+            </div>
+            <p className="text-xs text-gray-500">
+              Your clients can pay directly from their proposal page. Funds go directly to your Stripe account.
+            </p>
+            <button
+              onClick={handleStripeConnect}
+              disabled={stripeLoading}
+              className="btn-secondary text-sm"
+            >
+              {stripeLoading ? <Loader2 size={13} className="animate-spin" /> : <ExternalLink size={13} />}
+              Manage Stripe Dashboard
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="rounded-lg bg-gray-50 border border-gray-200 p-4 text-sm text-gray-600 space-y-1">
+              <p className="font-medium text-gray-900">Connect your Stripe account to:</p>
+              <ul className="list-disc list-inside space-y-0.5 text-gray-500">
+                <li>Accept card and bank transfer payments on proposals</li>
+                <li>Automatically update invoice status on payment</li>
+                <li>Show transparent processing fees to clients</li>
+              </ul>
+            </div>
+            <button
+              onClick={handleStripeConnect}
+              disabled={stripeLoading || user.role !== 'owner'}
+              className="btn-primary"
+            >
+              {stripeLoading ? <Loader2 size={14} className="animate-spin" /> : <CreditCard size={14} />}
+              {stripeLoading ? 'Connecting…' : 'Connect Stripe Account'}
+            </button>
+            {user.role !== 'owner' && (
+              <p className="text-xs text-amber-600">Only account owners can connect Stripe.</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Follow-Up Automation ── */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-9 h-9 bg-blue-50 rounded-lg flex items-center justify-center">
+            <Bell className="w-5 h-5 text-blue-600" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-gray-900">Automated Follow-Ups</h2>
+            <p className="text-xs text-gray-500">Remind clients at the right moment — automatically</p>
+          </div>
+        </div>
+
+        <form onSubmit={handleFollowUpSave} className="space-y-5">
+          {/* Channel toggles */}
+          <div className="grid grid-cols-2 gap-3">
+            <label className={cn(
+              'flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors',
+              followUpSettings.email_enabled ? 'border-navy-900 bg-navy-50' : 'border-gray-200'
+            )}>
+              <input
+                type="checkbox"
+                checked={followUpSettings.email_enabled}
+                onChange={(e) => setFollowUpSettings((s) => ({ ...s, email_enabled: e.target.checked }))}
+                className="rounded"
+              />
+              <div>
+                <div className="text-sm font-medium text-gray-900">Email follow-ups</div>
+                <div className="text-xs text-gray-400">via Resend</div>
+              </div>
+            </label>
+            <label className={cn(
+              'flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors',
+              followUpSettings.sms_enabled ? 'border-navy-900 bg-navy-50' : 'border-gray-200'
+            )}>
+              <input
+                type="checkbox"
+                checked={followUpSettings.sms_enabled}
+                onChange={(e) => setFollowUpSettings((s) => ({ ...s, sms_enabled: e.target.checked }))}
+                className="rounded"
+              />
+              <div>
+                <div className="text-sm font-medium text-gray-900">SMS follow-ups</div>
+                <div className="text-xs text-gray-400">via Twilio</div>
+              </div>
+            </label>
+          </div>
+
+          {/* Timing */}
+          <div className="space-y-4 pt-2">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm font-medium text-gray-900">Quote not opened</div>
+                <div className="text-xs text-gray-500">SMS reminder if client hasn&apos;t opened the proposal</div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <input
+                  type="number"
+                  min="1"
+                  max="168"
+                  value={followUpSettings.quote_not_opened_hours}
+                  onChange={(e) => setFollowUpSettings((s) => ({ ...s, quote_not_opened_hours: parseInt(e.target.value) || 24 }))}
+                  className="input w-20 text-right text-sm"
+                />
+                <span className="text-sm text-gray-500">hrs</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm font-medium text-gray-900">Quote not accepted</div>
+                <div className="text-xs text-gray-500">Email follow-up after client views but doesn&apos;t accept</div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <input
+                  type="number"
+                  min="1"
+                  max="720"
+                  value={followUpSettings.quote_not_accepted_hours}
+                  onChange={(e) => setFollowUpSettings((s) => ({ ...s, quote_not_accepted_hours: parseInt(e.target.value) || 72 }))}
+                  className="input w-20 text-right text-sm"
+                />
+                <span className="text-sm text-gray-500">hrs</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm font-medium text-gray-900">Invoice overdue</div>
+                <div className="text-xs text-gray-500">Payment reminder after due date</div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <input
+                  type="number"
+                  min="1"
+                  max="90"
+                  value={followUpSettings.invoice_overdue_days}
+                  onChange={(e) => setFollowUpSettings((s) => ({ ...s, invoice_overdue_days: parseInt(e.target.value) || 3 }))}
+                  className="input w-20 text-right text-sm"
+                />
+                <span className="text-sm text-gray-500">days</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 pt-2">
+            <button type="submit" disabled={fuLoading} className="btn-primary">
+              {fuLoading ? 'Saving…' : 'Save Follow-Up Settings'}
+            </button>
+            {fuSuccess && (
+              <span className="flex items-center gap-1 text-sm text-green-600">
+                <CheckCircle2 size={14} /> Saved
+              </span>
+            )}
+          </div>
+        </form>
+      </div>
+
+      {/* ── Account Info ── */}
       <div className="card">
         <div className="flex items-center gap-3 mb-6">
           <div className="w-9 h-9 bg-navy-50 rounded-lg flex items-center justify-center">
@@ -179,7 +380,7 @@ export function SettingsPageClient({ organization, user }: Props) {
         </div>
       </div>
 
-      {/* Referral */}
+      {/* ── Referral ── */}
       {organization?.referral_code && (
         <div className="card">
           <div className="flex items-center gap-3 mb-4">
@@ -195,10 +396,7 @@ export function SettingsPageClient({ organization, user }: Props) {
             <code className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm font-mono text-navy-900 tracking-wider">
               {organization.referral_code}
             </code>
-            <button
-              onClick={() => navigator.clipboard.writeText(organization.referral_code!)}
-              className="btn-secondary text-xs"
-            >
+            <button onClick={() => navigator.clipboard.writeText(organization.referral_code!)} className="btn-secondary text-xs">
               Copy
             </button>
           </div>

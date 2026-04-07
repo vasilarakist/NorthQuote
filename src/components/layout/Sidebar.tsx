@@ -10,6 +10,7 @@ import {
   FolderOpen,
   BookOpen,
   Settings,
+  Receipt,
   Menu,
   X,
   LogOut,
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
   { href: '/clients', label: 'Clients', icon: Users },
   { href: '/projects', label: 'Projects', icon: FolderOpen },
   { href: '/price-book', label: 'Price Book', icon: BookOpen },
+  { href: '/invoices', label: 'Invoices', icon: Receipt },
   { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
