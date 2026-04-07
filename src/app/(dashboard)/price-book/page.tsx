@@ -1,26 +1,32 @@
-import { BookOpen, Plus } from 'lucide-react'
+import { createClient } from '@/lib/supabase/server'
+import { PriceBookClient } from './PriceBookClient'
 
-export default function PriceBookPage() {
+export default async function PriceBookPage() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+
+  const { data: userRecord } = await supabase
+    .from('users')
+    .select('organization_id, organizations(trade_type)')
+    .eq('auth_id', user.id)
+    .single()
+  if (!userRecord) return null
+
+  const orgRaw = userRecord.organizations
+  const org = (Array.isArray(orgRaw) ? orgRaw[0] : orgRaw) as { trade_type: string | null } | null
+
+  const { data: items } = await supabase
+    .from('price_book_items')
+    .select('*')
+    .eq('organization_id', userRecord.organization_id)
+    .order('name')
+
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-serif text-2xl text-navy-900">Price Book</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Manage your materials, labour rates, and standard items</p>
-        </div>
-        <button className="btn-amber">
-          <Plus size={16} />
-          Add Item
-        </button>
-      </div>
-
-      <div className="card py-16 text-center">
-        <BookOpen className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-        <h3 className="font-serif text-lg text-gray-700 mb-1">Price Book coming soon</h3>
-        <p className="text-gray-500 text-sm">
-          Build your catalogue of standard materials, labour rates, and bundled items — then pull them directly into quotes.
-        </p>
-      </div>
-    </div>
+    <PriceBookClient
+      initialItems={items ?? []}
+      organizationId={userRecord.organization_id}
+      tradeType={org?.trade_type ?? 'general'}
+    />
   )
 }
