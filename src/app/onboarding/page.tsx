@@ -57,7 +57,7 @@ export default function OnboardingPage() {
     }
 
     try {
-      // Upload logo if provided
+      // Upload logo if provided (storage upload uses the browser client directly)
       let logoUrl: string | null = null
       if (logoFile) {
         const fileExt = logoFile.name.split('.').pop()
@@ -71,11 +71,13 @@ export default function OnboardingPage() {
         }
       }
 
-      // Create organization
+      // Create organization + user via the server-side API route which uses the
+      // service role client to bypass RLS (correct pattern for account creation).
       const referralCode = generateReferralCode(form.companyName)
-      const { data: org, error: orgError } = await supabase
-        .from('organizations')
-        .insert({
+      const res = await fetch('/api/onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           name: form.companyName,
           phone: form.phone || null,
           address: form.address || null,
@@ -87,24 +89,13 @@ export default function OnboardingPage() {
           gst_hst_number: form.gstHstNumber || null,
           logo_url: logoUrl,
           referral_code: referralCode,
-        })
-        .select()
-        .single()
+        }),
+      })
 
-      if (orgError) throw orgError
-
-      // Create user record
-      const { error: userError } = await supabase
-        .from('users')
-        .insert({
-          organization_id: org.id,
-          email: user.email!,
-          full_name: user.user_metadata?.full_name || null,
-          role: 'owner',
-          auth_id: user.id,
-        })
-
-      if (userError) throw userError
+      if (!res.ok) {
+        const { error } = await res.json()
+        throw new Error(error || 'Something went wrong. Please try again.')
+      }
 
       router.push('/dashboard')
       router.refresh()
