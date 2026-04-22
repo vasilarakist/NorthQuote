@@ -12,6 +12,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [verificationSent, setVerificationSent] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -25,7 +26,7 @@ export default function SignupPage() {
       password,
       options: {
         data: { full_name: fullName },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${window.location.origin}/auth/callback?next=/onboarding`,
       },
     })
 
@@ -35,10 +36,42 @@ export default function SignupPage() {
       return
     }
 
-    if (data.user) {
+    // If session is set, email confirmation is disabled — go straight to onboarding.
+    // If session is null, the user must confirm their email first.
+    if (data.session) {
       router.push('/onboarding')
       router.refresh()
+    } else {
+      setVerificationSent(true)
+      setLoading(false)
     }
+  }
+
+  if (verificationSent) {
+    return (
+      <>
+        <div className="text-center">
+          <div className="w-14 h-14 bg-amber-50 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-7 h-7 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25H4.5a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5H4.5a2.25 2.25 0 0 0-2.25 2.25m19.5 0-9.75 6.75L2.25 6.75" />
+            </svg>
+          </div>
+          <h1 className="font-serif text-2xl text-navy-900 mb-2">Check your email</h1>
+          <p className="text-gray-500 text-sm mb-2">
+            We sent a verification link to <strong>{email}</strong>.
+          </p>
+          <p className="text-gray-400 text-sm">
+            Click the link to verify your account and complete setup.
+          </p>
+        </div>
+        <p className="mt-6 text-center text-sm text-gray-500">
+          Already have an account?{' '}
+          <Link href="/login" className="font-medium text-navy-900 hover:text-amber-500 transition-colors">
+            Sign in
+          </Link>
+        </p>
+      </>
+    )
   }
 
   return (
