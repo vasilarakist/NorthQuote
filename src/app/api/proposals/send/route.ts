@@ -7,13 +7,15 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
 
 function buildEmailHtml({
   orgName, orgEmail, orgPhone, logoUrl, brandColor,
-  clientName, quoteNumber, scopeSummary, proposalUrl,
+  clientName, quoteNumber, scopeSummary, total, currency, proposalUrl,
 }: {
   orgName: string; orgEmail: string | null; orgPhone: string | null;
   logoUrl: string | null; brandColor: string;
   clientName: string; quoteNumber: string; scopeSummary: string | null;
+  total: number; currency: string;
   proposalUrl: string;
 }) {
+  const totalFormatted = new Intl.NumberFormat('en-CA', { style: 'currency', currency }).format(total)
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -36,10 +38,15 @@ function buildEmailHtml({
         <!-- Body -->
         <tr><td style="background:#fff;padding:32px">
           <h1 style="margin:0 0 8px;font-size:22px;color:#111827">Hi ${clientName},</h1>
-          <p style="margin:0 0 20px;color:#6b7280;font-size:15px">Your proposal <strong>${quoteNumber}</strong> from ${orgName} is ready for your review.</p>
+          <p style="margin:0 0 20px;color:#6b7280;font-size:15px">Your proposal <strong>${quoteNumber}</strong> from <strong>${orgName}</strong> is ready for your review.</p>
           ${scopeSummary ? `<div style="background:#f9fafb;border-left:3px solid ${brandColor};border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:24px">
+            <p style="margin:0 0 4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af">Scope of Work</p>
             <p style="margin:0;color:#374151;font-size:14px;line-height:1.6">${scopeSummary}</p>
           </div>` : ''}
+          <div style="background:#f9fafb;border-radius:8px;padding:16px 20px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:14px;color:#6b7280">Total Amount</span>
+            <span style="font-size:22px;font-weight:700;color:#111827">${totalFormatted}</span>
+          </div>
           <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
             <tr><td align="center">
               <a href="${proposalUrl}" style="display:inline-block;background:${brandColor};color:#fff;font-weight:600;font-size:16px;text-decoration:none;padding:14px 32px;border-radius:8px">
@@ -118,7 +125,7 @@ export async function POST(request: Request) {
     try {
       const resend = new Resend(process.env.RESEND_API_KEY)
       await resend.emails.send({
-        from: `${org?.name ?? 'NorthQuote'} <proposals@northquote.app>`,
+        from: `${org?.name ?? 'NorthQuote'} <noreply@northquote.com>`,
         to: client.email,
         subject: `Your proposal from ${org?.name ?? 'your contractor'} is ready`,
         html: buildEmailHtml({
@@ -130,6 +137,8 @@ export async function POST(request: Request) {
           clientName: client.name,
           quoteNumber: quote.quote_number,
           scopeSummary: quote.notes_to_client,
+          total: quote.total ?? 0,
+          currency: quote.currency ?? 'CAD',
           proposalUrl,
         }),
       })
@@ -161,8 +170,9 @@ export async function POST(request: Request) {
     event_type: 'sent',
   })
 
-  return NextResponse.json({
-    proposal_url: proposalUrl,
-    errors: errors.length ? errors : undefined,
-  })
+  if (errors.length) {
+    return NextResponse.json({ proposal_url: proposalUrl, errors }, { status: 207 })
+  }
+
+  return NextResponse.json({ proposal_url: proposalUrl })
 }

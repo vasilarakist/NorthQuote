@@ -180,10 +180,13 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
       }),
     })
     const data = await res.json()
-    if (!res.ok) {
+    if (!res.ok && res.status !== 207) {
       setSendError(data.error ?? 'Send failed.')
       setSending(false)
       return
+    }
+    if (data.errors?.length) {
+      setSendError(data.errors.join(' '))
     }
     setProposalUrl(data.proposal_url)
     setSending(false)
