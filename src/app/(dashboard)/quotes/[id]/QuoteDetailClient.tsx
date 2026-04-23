@@ -67,6 +67,7 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
   const [smsPhone, setSmsPhone] = useState(quote.clients?.phone ?? '')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
+  const [justSent, setJustSent] = useState(false)
   const [proposalUrl, setProposalUrl] = useState<string | null>(
     quote.proposal_token ? `${process.env.NEXT_PUBLIC_APP_URL}/proposal/${quote.proposal_token}` : null
   )
@@ -189,6 +190,7 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
       setSendError(data.errors.join(' '))
     }
     setProposalUrl(data.proposal_url)
+    setJustSent(true)
     setSending(false)
     router.refresh()
   }
@@ -343,7 +345,7 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
             </>
           )}
           {!editing && canSend && (
-            <button onClick={() => setShowSendModal(true)} className="btn-primary"><Send size={14} /> Send Proposal</button>
+            <button onClick={() => { setJustSent(false); setSendError(''); setShowSendModal(true) }} className="btn-primary"><Send size={14} /> Send Proposal</button>
           )}
           {!editing && canConvert && (
             <button onClick={handleConvertToInvoice} disabled={converting} className="btn-amber">
@@ -523,7 +525,7 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
             <div className="p-6 space-y-5">
               {sendError && <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{sendError}</div>}
 
-              {proposalUrl && !sending ? (
+              {justSent && !sending ? (
                 <div className="space-y-3">
                   <p className="text-sm text-gray-600">Proposal sent! Share this link with your client:</p>
                   <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-3">
