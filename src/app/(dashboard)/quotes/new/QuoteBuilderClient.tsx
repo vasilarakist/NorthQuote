@@ -7,7 +7,7 @@ import type { Client, Project, PriceBookItem } from '@/types/database'
 import { LineItemsEditor, type LineItemDraft, newLineItem } from '@/components/ui/LineItemsEditor'
 import { getTaxInfo, calcLineTotal } from '@/lib/taxes'
 import { formatCurrency, CANADIAN_PROVINCES, US_STATES } from '@/lib/utils'
-import { Sparkles, Loader2, Plus, X, ChevronDown, Wand2, Layers } from 'lucide-react'
+import { Sparkles, Loader2, Plus, X, ChevronDown, Wand2, Layers, CheckCircle2, AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -77,6 +77,8 @@ export function QuoteBuilderClient({
   // Save state
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [sendStatus, setSendStatus] = useState<'idle' | 'success' | 'error'>('idle')
+  const [sendMessage, setSendMessage] = useState('')
 
   // Inline new client modal
   const [showNewClient, setShowNewClient] = useState(false)
@@ -337,28 +339,41 @@ export function QuoteBuilderClient({
         const now = new Date()
         const baseNumber = `Q-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${String((count ?? 0) + 1).padStart(4, '0')}`
 
+        let primaryQuoteId: string
+
         if (tieredMode) {
           const goodQuote = await saveSingleQuote(supabase, `${baseNumber}-G`, status, goodItems, goodNotes, 'good')
           await saveSingleQuote(supabase, `${baseNumber}-B`, status, betterItems, betterNotes, 'better')
           await saveSingleQuote(supabase, `${baseNumber}-X`, status, bestItems, bestNotes, 'best')
-          if (status === 'sent') {
-            await fetch('/api/proposals/send', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ quote_id: goodQuote.id, send_email: true, send_sms: false }),
-            })
-          }
-          router.push(`/quotes/${goodQuote.id}`)
+          primaryQuoteId = goodQuote.id
         } else {
           const quote = await saveSingleQuote(supabase, baseNumber, status, lineItems, notesToClient, 'single')
-          if (status === 'sent') {
-            await fetch('/api/proposals/send', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ quote_id: quote.id, send_email: true, send_sms: false }),
-            })
+          primaryQuoteId = quote.id
+        }
+
+        if (status === 'sent') {
+          const res = await fetch('/api/proposals/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ quote_id: primaryQuoteId, send_email: true, send_sms: false }),
+          })
+          const data = await res.json().catch(() => ({}))
+
+          if (res.ok) {
+            setSendStatus('success')
+            setSendMessage('Proposal sent!')
+            setSaving(false)
+            setTimeout(() => router.push(`/quotes/${primaryQuoteId}`), 1500)
+          } else {
+            const errMsg = data.error ?? `Send failed (${res.status}). Quote saved — go to the quote to retry.`
+            setSendStatus('error')
+            setSendMessage(errMsg)
+            setSaving(false)
+            // Still navigate after a longer delay so the user can read the error
+            setTimeout(() => router.push(`/quotes/${primaryQuoteId}`), 4000)
           }
-          router.push(`/quotes/${quote.id}`)
+        } else {
+          router.push(`/quotes/${primaryQuoteId}`)
         }
       } catch (err) {
         setSaveError(err instanceof Error ? err.message : 'Failed to save.')
@@ -723,38 +738,52 @@ export function QuoteBuilderClient({
       )}
 
       {/* ── Sticky Action Bar ── */}
-      <div className="fixed bottom-0 left-0 right-0 lg:left-60 bg-white border-t border-gray-200 px-6 py-3 flex items-center justify-between gap-4 z-20">
-        <button
-          type="button"
-          onClick={() => router.back()}
-          className="btn-secondary"
-        >
-          Cancel
-        </button>
-        <div className="flex items-center gap-3">
-          {!tieredMode && (
-            <div className="text-sm text-gray-500 hidden sm:block">
-              Total: <span className="font-semibold text-gray-900">{formatCurrency(total)}</span>
-            </div>
-          )}
+      <div className="fixed bottom-0 left-0 right-0 lg:left-60 bg-white border-t border-gray-200 px-6 py-3 z-20">
+        {/* Send status notification */}
+        {sendStatus !== 'idle' && (
+          <div className={cn(
+            'flex items-center gap-2 text-sm font-medium mb-2 px-3 py-2 rounded-lg',
+            sendStatus === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+          )}>
+            {sendStatus === 'success'
+              ? <CheckCircle2 size={15} className="shrink-0" />
+              : <AlertCircle size={15} className="shrink-0" />}
+            {sendMessage}
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-4">
           <button
             type="button"
-            onClick={() => handleSave('draft')}
-            disabled={saving}
+            onClick={() => router.back()}
             className="btn-secondary"
           >
-            {saving ? <Loader2 size={14} className="animate-spin" /> : null}
-            Save Draft
+            Cancel
           </button>
-          <button
-            type="button"
-            onClick={() => handleSave('sent')}
-            disabled={saving}
-            className="btn-primary"
-          >
-            {saving ? <Loader2 size={14} className="animate-spin" /> : null}
-            Save &amp; Send
-          </button>
+          <div className="flex items-center gap-3">
+            {!tieredMode && (
+              <div className="text-sm text-gray-500 hidden sm:block">
+                Total: <span className="font-semibold text-gray-900">{formatCurrency(total)}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => handleSave('draft')}
+              disabled={saving || sendStatus !== 'idle'}
+              className="btn-secondary"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+              Save Draft
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSave('sent')}
+              disabled={saving || sendStatus !== 'idle'}
+              className="btn-primary"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+              Save &amp; Send
+            </button>
+          </div>
         </div>
       </div>
 
