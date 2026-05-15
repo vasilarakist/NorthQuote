@@ -7,7 +7,7 @@ import type { Client, Project, PriceBookItem } from '@/types/database'
 import { LineItemsEditor, type LineItemDraft, newLineItem } from '@/components/ui/LineItemsEditor'
 import { getTaxInfo, calcLineTotal } from '@/lib/taxes'
 import { formatCurrency, CANADIAN_PROVINCES, US_STATES } from '@/lib/utils'
-import { Sparkles, Loader2, Plus, X, ChevronDown, Wand2, Layers, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Sparkles, Loader2, Plus, X, ChevronDown, Wand2, Layers, CheckCircle2, AlertCircle, RefreshCw, PenLine } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -73,6 +73,8 @@ export function QuoteBuilderClient({
   const [aiError, setAiError] = useState('')
   const [introLoading, setIntroLoading] = useState(false)
   const [scopeSummary, setScopeSummary] = useState('')
+  // When true, user has opted to write the scope manually — skip auto-generation
+  const [scopeManual, setScopeManual] = useState(false)
 
   // Save state
   const [saving, setSaving] = useState(false)
@@ -170,11 +172,18 @@ export function QuoteBuilderClient({
     )
     setLineItems(newItems)
     setAiLoading(false)
+    // Auto-populate scope of work unless user has opted to write manually
+    if (!scopeManual) {
+      handleGenerateIntro(newItems)
+    }
   }
 
   // ─── AI Generate Intro ────────────────────────────────────────
-  async function handleGenerateIntro() {
-    if (!lineItems.length) return
+  // itemsOverride: pass newly generated items directly so we don't depend on
+  // stale state (setState is async; this is called right after setLineItems).
+  async function handleGenerateIntro(itemsOverride?: LineItemDraft[]) {
+    const items = itemsOverride ?? (tieredMode ? activeTierItems : lineItems)
+    if (!items.length) return
     setIntroLoading(true)
     const res = await fetch('/api/ai/generate-intro', {
       method: 'POST',
@@ -182,7 +191,7 @@ export function QuoteBuilderClient({
       body: JSON.stringify({
         job_description: jobDescription,
         trade_type: tradeType,
-        line_items: lineItems.map((i) => ({
+        line_items: items.map((i) => ({
           description: i.description,
           category: i.category,
           quantity: i.quantity,
@@ -490,7 +499,7 @@ export function QuoteBuilderClient({
         </div>
         <textarea
           value={jobDescription}
-          onChange={(e) => setJobDescription(e.target.value)}
+          onChange={(e) => { setJobDescription(e.target.value); setScopeManual(false) }}
           className="input resize-none"
           rows={4}
           placeholder="e.g. Replace the main electrical panel from 100A to 200A service upgrade, install 10 new circuits, add 4 pot lights in kitchen, and update smoke detectors throughout the house..."
@@ -602,23 +611,41 @@ export function QuoteBuilderClient({
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="label mb-0">Scope of Work</label>
-                <button
-                  type="button"
-                  onClick={handleGenerateIntro}
-                  disabled={introLoading || !activeTierItems.length}
-                  className="flex items-center gap-1 text-xs text-amber-500 hover:text-amber-600 disabled:opacity-40 transition-colors"
-                >
-                  {introLoading ? <Loader2 size={11} className="animate-spin" /> : <Wand2 size={11} />}
-                  Generate with AI
-                </button>
+                {!introLoading && activeTierItems.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => { setScopeManual(false); handleGenerateIntro() }}
+                      className="flex items-center gap-1 text-xs text-amber-500 hover:text-amber-600 transition-colors"
+                    >
+                      <RefreshCw size={10} /> Regenerate
+                    </button>
+                    {scopeSummary && (
+                      <button
+                        type="button"
+                        onClick={() => { setScopeSummary(''); setScopeManual(true) }}
+                        className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        <PenLine size={10} /> Write my own
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-              <textarea
-                value={scopeSummary}
-                onChange={(e) => setScopeSummary(e.target.value)}
-                className="input resize-none"
-                rows={3}
-                placeholder="Professional description of the work scope, shared across all tiers…"
-              />
+              {introLoading ? (
+                <div className="input resize-none min-h-[76px] flex items-center gap-2 text-sm text-gray-400 cursor-default">
+                  <Loader2 size={14} className="animate-spin text-amber-500 shrink-0" />
+                  Generating scope summary…
+                </div>
+              ) : (
+                <textarea
+                  value={scopeSummary}
+                  onChange={(e) => { setScopeSummary(e.target.value); setScopeManual(true) }}
+                  className="input resize-none"
+                  rows={3}
+                  placeholder="AI will auto-generate after you build your estimate, or write your own…"
+                />
+              )}
             </div>
             {(['good', 'better', 'best'] as const).map((tier) => {
               const val = tier === 'good' ? goodNotes : tier === 'better' ? betterNotes : bestNotes
@@ -642,23 +669,41 @@ export function QuoteBuilderClient({
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="label mb-0">Scope of Work</label>
-              <button
-                type="button"
-                onClick={handleGenerateIntro}
-                disabled={introLoading || !lineItems.length}
-                className="flex items-center gap-1 text-xs text-amber-500 hover:text-amber-600 disabled:opacity-40 transition-colors"
-              >
-                {introLoading ? <Loader2 size={11} className="animate-spin" /> : <Wand2 size={11} />}
-                Generate with AI
-              </button>
+              {!introLoading && lineItems.length > 0 && (
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => { setScopeManual(false); handleGenerateIntro() }}
+                    className="flex items-center gap-1 text-xs text-amber-500 hover:text-amber-600 transition-colors"
+                  >
+                    <RefreshCw size={10} /> Regenerate
+                  </button>
+                  {scopeSummary && (
+                    <button
+                      type="button"
+                      onClick={() => { setScopeSummary(''); setScopeManual(true) }}
+                      className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                    >
+                      <PenLine size={10} /> Write my own
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-            <textarea
-              value={scopeSummary}
-              onChange={(e) => setScopeSummary(e.target.value)}
-              className="input resize-none"
-              rows={3}
-              placeholder="Professional description of the work scope, shown to the client…"
-            />
+            {introLoading ? (
+              <div className="input resize-none min-h-[76px] flex items-center gap-2 text-sm text-gray-400 cursor-default">
+                <Loader2 size={14} className="animate-spin text-amber-500 shrink-0" />
+                Generating scope summary…
+              </div>
+            ) : (
+              <textarea
+                value={scopeSummary}
+                onChange={(e) => { setScopeSummary(e.target.value); setScopeManual(true) }}
+                className="input resize-none"
+                rows={3}
+                placeholder={lineItems.length ? 'AI will auto-generate after you build your estimate, or write your own…' : 'Generate your estimate first — scope will auto-populate…'}
+              />
+            )}
           </div>
           <div>
             <label className="label">Notes to client <span className="text-gray-400 font-normal">(optional)</span></label>
