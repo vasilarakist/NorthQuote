@@ -31,7 +31,7 @@ interface Props {
     id: string; quote_number: string; status: string; tier: string;
     subtotal: number; tax_amount: number; tax_rate: number | null; tax_type: string | null;
     total: number; currency: string; valid_until: string | null;
-    notes_to_client: string | null; ai_generated: boolean;
+    scope_summary: string | null; notes_to_client: string | null; ai_generated: boolean;
   }
   org: Org | null
   client: Client | null
@@ -249,9 +249,18 @@ export function ProposalClient({ quote, org, client, project, lineItems, tierQuo
           )}
         </div>
 
-        {/* Scope summary */}
-        {quote.notes_to_client && (
+        {/* Scope of Work */}
+        {quote.scope_summary && (
           <div className="rounded-xl p-5 border-l-4" style={{ borderColor: accent, background: 'white' }}>
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Scope of Work</p>
+            <p className="text-gray-700 leading-relaxed">{quote.scope_summary}</p>
+          </div>
+        )}
+
+        {/* Notes to client */}
+        {quote.notes_to_client && (
+          <div className="rounded-xl p-5 border-l-4 border-amber-400 bg-amber-50">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">Notes</p>
             <p className="text-gray-700 leading-relaxed">{quote.notes_to_client}</p>
           </div>
         )}

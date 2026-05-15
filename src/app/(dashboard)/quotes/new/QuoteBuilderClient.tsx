@@ -72,6 +72,7 @@ export function QuoteBuilderClient({
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState('')
   const [introLoading, setIntroLoading] = useState(false)
+  const [scopeSummary, setScopeSummary] = useState('')
 
   // Save state
   const [saving, setSaving] = useState(false)
@@ -189,7 +190,7 @@ export function QuoteBuilderClient({
       }),
     })
     const data = await res.json()
-    if (res.ok && data.intro) setNotesToClient(data.intro)
+    if (res.ok && data.intro) setScopeSummary(data.intro)
     setIntroLoading(false)
   }
 
@@ -272,6 +273,7 @@ export function QuoteBuilderClient({
         valid_until: validUntil || null,
         ai_generated: items.some((i) => i.ai_generated),
         ai_prompt: jobDescription || null,
+        scope_summary: scopeSummary || null,
         notes_to_client: notes || null,
         internal_notes: internalNotes || null,
         sent_at: status === 'sent' ? new Date().toISOString() : null,
@@ -339,9 +341,23 @@ export function QuoteBuilderClient({
           const goodQuote = await saveSingleQuote(supabase, `${baseNumber}-G`, status, goodItems, goodNotes, 'good')
           await saveSingleQuote(supabase, `${baseNumber}-B`, status, betterItems, betterNotes, 'better')
           await saveSingleQuote(supabase, `${baseNumber}-X`, status, bestItems, bestNotes, 'best')
+          if (status === 'sent') {
+            await fetch('/api/proposals/send', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ quote_id: goodQuote.id, send_email: true, send_sms: false }),
+            })
+          }
           router.push(`/quotes/${goodQuote.id}`)
         } else {
           const quote = await saveSingleQuote(supabase, baseNumber, status, lineItems, notesToClient, 'single')
+          if (status === 'sent') {
+            await fetch('/api/proposals/send', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ quote_id: quote.id, send_email: true, send_sms: false }),
+            })
+          }
           router.push(`/quotes/${quote.id}`)
         }
       } catch (err) {
@@ -352,7 +368,7 @@ export function QuoteBuilderClient({
     [
       clientId, projectId, lineItems, goodItems, betterItems, bestItems,
       goodNotes, betterNotes, bestNotes, tieredMode,
-      organizationId, taxInfo, validUntil, jobDescription, notesToClient, internalNotes, router,
+      organizationId, taxInfo, validUntil, jobDescription, scopeSummary, notesToClient, internalNotes, router,
     ]
   )
 
@@ -568,6 +584,27 @@ export function QuoteBuilderClient({
         <h2 className="font-semibold text-gray-900">Quote Options</h2>
         {tieredMode ? (
           <div className="space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="label mb-0">Scope of Work</label>
+                <button
+                  type="button"
+                  onClick={handleGenerateIntro}
+                  disabled={introLoading || !activeTierItems.length}
+                  className="flex items-center gap-1 text-xs text-amber-500 hover:text-amber-600 disabled:opacity-40 transition-colors"
+                >
+                  {introLoading ? <Loader2 size={11} className="animate-spin" /> : <Wand2 size={11} />}
+                  Generate with AI
+                </button>
+              </div>
+              <textarea
+                value={scopeSummary}
+                onChange={(e) => setScopeSummary(e.target.value)}
+                className="input resize-none"
+                rows={3}
+                placeholder="Professional description of the work scope, shared across all tiers…"
+              />
+            </div>
             {(['good', 'better', 'best'] as const).map((tier) => {
               const val = tier === 'good' ? goodNotes : tier === 'better' ? betterNotes : bestNotes
               const setter = tier === 'good' ? setGoodNotes : tier === 'better' ? setBetterNotes : setBestNotes
@@ -586,27 +623,39 @@ export function QuoteBuilderClient({
             })}
           </div>
         ) : (
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="label mb-0">Notes to client</label>
-            <button
-              type="button"
-              onClick={handleGenerateIntro}
-              disabled={introLoading || !lineItems.length}
-              className="flex items-center gap-1 text-xs text-amber-500 hover:text-amber-600 disabled:opacity-40 transition-colors"
-            >
-              {introLoading ? <Loader2 size={11} className="animate-spin" /> : <Wand2 size={11} />}
-              Generate scope summary
-            </button>
+        <>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="label mb-0">Scope of Work</label>
+              <button
+                type="button"
+                onClick={handleGenerateIntro}
+                disabled={introLoading || !lineItems.length}
+                className="flex items-center gap-1 text-xs text-amber-500 hover:text-amber-600 disabled:opacity-40 transition-colors"
+              >
+                {introLoading ? <Loader2 size={11} className="animate-spin" /> : <Wand2 size={11} />}
+                Generate with AI
+              </button>
+            </div>
+            <textarea
+              value={scopeSummary}
+              onChange={(e) => setScopeSummary(e.target.value)}
+              className="input resize-none"
+              rows={3}
+              placeholder="Professional description of the work scope, shown to the client…"
+            />
           </div>
-          <textarea
-            value={notesToClient}
-            onChange={(e) => setNotesToClient(e.target.value)}
-            className="input resize-none"
-            rows={3}
-            placeholder="Visible to the client on the quote PDF…"
-          />
-        </div>
+          <div>
+            <label className="label">Notes to client <span className="text-gray-400 font-normal">(optional)</span></label>
+            <textarea
+              value={notesToClient}
+              onChange={(e) => setNotesToClient(e.target.value)}
+              className="input resize-none"
+              rows={2}
+              placeholder="e.g. Used fixtures as discussed. Permit pulled on your behalf."
+            />
+          </div>
+        </>
         )}
         <div>
           <label className="label">Internal notes <span className="text-gray-400 font-normal">(not shown to client)</span></label>

@@ -7,11 +7,12 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
 
 function buildEmailHtml({
   orgName, orgEmail, orgPhone, logoUrl, brandColor,
-  clientName, quoteNumber, scopeSummary, total, currency, proposalUrl,
+  clientName, quoteNumber, scopeSummary, notesToClient, total, currency, proposalUrl,
 }: {
   orgName: string; orgEmail: string | null; orgPhone: string | null;
   logoUrl: string | null; brandColor: string;
-  clientName: string; quoteNumber: string; scopeSummary: string | null;
+  clientName: string; quoteNumber: string;
+  scopeSummary: string | null; notesToClient: string | null;
   total: number; currency: string;
   proposalUrl: string;
 }) {
@@ -39,9 +40,13 @@ function buildEmailHtml({
         <tr><td style="background:#fff;padding:32px">
           <h1 style="margin:0 0 8px;font-size:22px;color:#111827">Hi ${clientName},</h1>
           <p style="margin:0 0 20px;color:#6b7280;font-size:15px">Your proposal <strong>${quoteNumber}</strong> from <strong>${orgName}</strong> is ready for your review.</p>
-          ${scopeSummary ? `<div style="background:#f9fafb;border-left:3px solid ${brandColor};border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:24px">
+          ${scopeSummary ? `<div style="background:#f9fafb;border-left:3px solid ${brandColor};border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:16px">
             <p style="margin:0 0 4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af">Scope of Work</p>
             <p style="margin:0;color:#374151;font-size:14px;line-height:1.6">${scopeSummary}</p>
+          </div>` : ''}
+          ${notesToClient ? `<div style="background:#fff8ed;border-left:3px solid #f59e0b;border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:16px">
+            <p style="margin:0 0 4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af">Notes</p>
+            <p style="margin:0;color:#374151;font-size:14px;line-height:1.6">${notesToClient}</p>
           </div>` : ''}
           <div style="background:#f9fafb;border-radius:8px;padding:16px 20px;margin-bottom:24px;text-align:center">
             <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af;margin-bottom:6px">Total Amount</div>
@@ -136,7 +141,8 @@ export async function POST(request: Request) {
           brandColor: org?.brand_color_primary ?? '#0F1C2E',
           clientName: client.name,
           quoteNumber: quote.quote_number,
-          scopeSummary: quote.notes_to_client,
+          scopeSummary: quote.scope_summary ?? null,
+          notesToClient: quote.notes_to_client ?? null,
           total: quote.total ?? 0,
           currency: quote.currency ?? 'CAD',
           proposalUrl,

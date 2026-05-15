@@ -232,8 +232,8 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
       tier: quote.tier, subtotal: quote.subtotal, tax_amount: quote.tax_amount,
       tax_rate: quote.tax_rate, tax_type: quote.tax_type, total: quote.total,
       currency: quote.currency, valid_until: quote.valid_until, ai_generated: quote.ai_generated,
-      ai_prompt: quote.ai_prompt, notes_to_client: quote.notes_to_client,
-      internal_notes: quote.internal_notes,
+      ai_prompt: quote.ai_prompt, scope_summary: quote.scope_summary ?? null,
+      notes_to_client: quote.notes_to_client, internal_notes: quote.internal_notes,
     }).select().single()
     if (newQuote) {
       const dupItems = initialLineItems.map((item, idx) => ({

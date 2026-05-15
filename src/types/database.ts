@@ -100,6 +100,7 @@ export interface Quote {
   valid_until: string | null
   ai_generated: boolean
   ai_prompt: string | null
+  scope_summary: string | null
   notes_to_client: string | null
   internal_notes: string | null
   sent_at: string | null
