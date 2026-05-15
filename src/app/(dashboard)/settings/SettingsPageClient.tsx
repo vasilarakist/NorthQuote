@@ -55,6 +55,7 @@ export function SettingsPageClient({ organization, user }: Props) {
 
   // Stripe Connect
   const [stripeLoading, setStripeLoading] = useState(false)
+  const [stripeError, setStripeError] = useState('')
   const stripeConnected = stripeConnectedParam || Boolean(organization?.stripe_account_id)
 
   // Exports
@@ -133,10 +134,20 @@ export function SettingsPageClient({ organization, user }: Props) {
 
   async function handleStripeConnect() {
     setStripeLoading(true)
-    const res = await fetch('/api/stripe/connect', { method: 'POST' })
-    const data = await res.json()
-    if (data.url) window.location.href = data.url
-    else setStripeLoading(false)
+    setStripeError('')
+    try {
+      const res = await fetch('/api/stripe/connect', { method: 'POST' })
+      const data = await res.json()
+      if (data.url) {
+        window.location.href = data.url
+      } else {
+        setStripeError(data.error ?? 'Failed to start Stripe onboarding. Please try again.')
+        setStripeLoading(false)
+      }
+    } catch {
+      setStripeError('Network error. Please check your connection and try again.')
+      setStripeLoading(false)
+    }
   }
 
   return (
@@ -278,6 +289,9 @@ export function SettingsPageClient({ organization, user }: Props) {
             </button>
             {user.role !== 'owner' && (
               <p className="text-xs text-amber-600">Only account owners can connect Stripe.</p>
+            )}
+            {stripeError && (
+              <p className="text-xs text-red-600">{stripeError}</p>
             )}
           </div>
         )}

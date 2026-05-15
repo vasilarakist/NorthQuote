@@ -30,28 +30,34 @@ export async function POST(request: Request) {
 
   // Create or reuse Stripe account
   let stripeAccountId = org.stripe_account_id
-  if (!stripeAccountId) {
-    const account = await stripe.accounts.create({
-      type: 'standard',
-      business_profile: { name: org.name ?? undefined },
-      email: org.email ?? undefined,
+  try {
+    if (!stripeAccountId) {
+      const account = await stripe.accounts.create({
+        type: 'standard',
+        business_profile: { name: org.name ?? undefined },
+        email: org.email ?? undefined,
+      })
+      stripeAccountId = account.id
+      await serviceClient
+        .from('organizations')
+        .update({ stripe_account_id: stripeAccountId })
+        .eq('id', org.id)
+    }
+
+    // Generate onboarding Account Link
+    const accountLink = await stripe.accountLinks.create({
+      account: stripeAccountId,
+      refresh_url: `${APP_URL}/settings`,
+      return_url: `${APP_URL}/settings?stripe=connected`,
+      type: 'account_onboarding',
     })
-    stripeAccountId = account.id
-    await serviceClient
-      .from('organizations')
-      .update({ stripe_account_id: stripeAccountId })
-      .eq('id', org.id)
+
+    return NextResponse.json({ url: accountLink.url })
+  } catch (err) {
+    console.error('Stripe Connect error:', err)
+    const message = err instanceof Error ? err.message : 'Stripe configuration error'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
-
-  // Generate onboarding Account Link
-  const accountLink = await stripe.accountLinks.create({
-    account: stripeAccountId,
-    refresh_url: `${APP_URL}/api/stripe/connect`,
-    return_url: `${APP_URL}/settings?stripe=connected`,
-    type: 'account_onboarding',
-  })
-
-  return NextResponse.json({ url: accountLink.url })
 }
 
 // GET: re-generate account link (refresh_url redirect target)
