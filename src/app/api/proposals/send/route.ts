@@ -27,7 +27,7 @@ function buildEmailHtml({
         <tr><td style="background:${brandColor};padding:28px 32px">
           <table width="100%" cellpadding="0" cellspacing="0">
             <tr>
-              <td>${logoUrl ? `<img src="${logoUrl}" width="40" height="40" style="border-radius:8px;object-fit:cover">` : `<div style="width:40px;height:40px;border-radius:8px;background:rgba(255,255,255,.2);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:#fff">${orgName.charAt(0)}</div>`}</td>
+              <td style="vertical-align:middle">${logoUrl ? `<img src="${logoUrl}" width="40" height="40" style="border-radius:8px;object-fit:cover;display:block">` : `<div style="width:40px;height:40px;border-radius:50%;background:#1e293b;text-align:center;line-height:40px;font-weight:700;font-size:18px;color:#fff">${orgName.charAt(0)}</div>`}</td>
               <td style="padding-left:12px;vertical-align:middle">
                 <div style="font-weight:600;font-size:18px;color:#fff">${orgName}</div>
                 <div style="font-size:12px;color:rgba(255,255,255,.7)">Professional Proposal</div>
@@ -43,9 +43,9 @@ function buildEmailHtml({
             <p style="margin:0 0 4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af">Scope of Work</p>
             <p style="margin:0;color:#374151;font-size:14px;line-height:1.6">${scopeSummary}</p>
           </div>` : ''}
-          <div style="background:#f9fafb;border-radius:8px;padding:16px 20px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center">
-            <span style="font-size:14px;color:#6b7280">Total Amount</span>
-            <span style="font-size:22px;font-weight:700;color:#111827">${totalFormatted}</span>
+          <div style="background:#f9fafb;border-radius:8px;padding:16px 20px;margin-bottom:24px;text-align:center">
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af;margin-bottom:6px">Total Amount</div>
+            <div style="font-size:28px;font-weight:700;color:#111827">${totalFormatted}</div>
           </div>
           <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
             <tr><td align="center">
