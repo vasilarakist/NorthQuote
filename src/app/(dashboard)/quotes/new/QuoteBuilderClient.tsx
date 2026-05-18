@@ -7,7 +7,7 @@ import type { Client, Project, PriceBookItem } from '@/types/database'
 import { LineItemsEditor, type LineItemDraft, newLineItem } from '@/components/ui/LineItemsEditor'
 import { getTaxInfo, calcLineTotal } from '@/lib/taxes'
 import { formatCurrency, CANADIAN_PROVINCES, US_STATES } from '@/lib/utils'
-import { Sparkles, Loader2, Plus, X, ChevronDown, Wand2, Layers, CheckCircle2, AlertCircle, RefreshCw, PenLine } from 'lucide-react'
+import { Sparkles, Loader2, Plus, X, ChevronDown, Wand2, Layers, CheckCircle2, AlertCircle, RefreshCw, PenLine, Send, MessageSquare, Link2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -81,6 +81,12 @@ export function QuoteBuilderClient({
   const [saveError, setSaveError] = useState('')
   const [sendStatus, setSendStatus] = useState<'idle' | 'success' | 'error'>('idle')
   const [sendMessage, setSendMessage] = useState('')
+
+  // Send modal (shown before Save & Send)
+  const [showSendModal, setShowSendModal] = useState(false)
+  const [builderSendEmail, setBuilderSendEmail] = useState(true)
+  const [builderSendSms, setBuilderSendSms] = useState(false)
+  const [builderSmsPhone, setBuilderSmsPhone] = useState('')
 
   // Inline new client modal
   const [showNewClient, setShowNewClient] = useState(false)
@@ -318,7 +324,7 @@ export function QuoteBuilderClient({
 
   // ─── Save Quote ───────────────────────────────────────────────
   const handleSave = useCallback(
-    async (status: 'draft' | 'sent') => {
+    async (status: 'draft' | 'sent', sendOptions?: { email: boolean; sms: boolean; phone: string }) => {
       if (!clientId || !projectId) {
         setSaveError('Please select a client and project.')
         return
@@ -364,7 +370,12 @@ export function QuoteBuilderClient({
           const res = await fetch('/api/proposals/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ quote_id: primaryQuoteId, send_email: true, send_sms: false }),
+            body: JSON.stringify({
+              quote_id: primaryQuoteId,
+              send_email: sendOptions?.email ?? true,
+              send_sms: sendOptions?.sms ?? false,
+              client_phone_override: sendOptions?.phone || null,
+            }),
           })
           const data = await res.json().catch(() => ({}))
 
@@ -821,7 +832,17 @@ export function QuoteBuilderClient({
             </button>
             <button
               type="button"
-              onClick={() => handleSave('sent')}
+              onClick={() => {
+                if (!clientId || !projectId) {
+                  setSaveError('Please select a client and project.')
+                  return
+                }
+                setBuilderSendEmail(true)
+                setBuilderSendSms(false)
+                const sel = clients.find(c => c.id === clientId)
+                setBuilderSmsPhone(sel?.phone ?? '')
+                setShowSendModal(true)
+              }}
               disabled={saving || sendStatus !== 'idle'}
               className="btn-primary"
             >
@@ -868,6 +889,78 @@ export function QuoteBuilderClient({
           </div>
         </div>
       )}
+
+      {/* ── Send Proposal Modal ── */}
+      {showSendModal && (() => {
+        const sel = clients.find(c => c.id === clientId)
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setShowSendModal(false)} />
+            <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-md">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <h2 className="font-serif text-lg text-navy-900">Send Proposal</h2>
+                <button onClick={() => setShowSendModal(false)} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="p-6 space-y-5">
+                <div className="space-y-3">
+                  {/* Email option */}
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" checked={builderSendEmail} onChange={(e) => setBuilderSendEmail(e.target.checked)} className="mt-0.5 rounded" />
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-gray-900">Send via email</div>
+                      {sel?.email ? (
+                        <div className="text-xs text-gray-500">{sel.email}</div>
+                      ) : (
+                        <div className="text-xs text-amber-600">No email on file for this client</div>
+                      )}
+                    </div>
+                  </label>
+
+                  {/* SMS option */}
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" checked={builderSendSms} onChange={(e) => setBuilderSendSms(e.target.checked)} className="mt-0.5 rounded" />
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-gray-900 flex items-center gap-1">
+                        <MessageSquare size={13} /> Send via SMS
+                      </div>
+                      {builderSendSms && (
+                        <input
+                          type="tel"
+                          value={builderSmsPhone}
+                          onChange={(e) => setBuilderSmsPhone(e.target.value)}
+                          className="input mt-1.5 text-sm"
+                          placeholder="+1 (416) 555-0100"
+                        />
+                      )}
+                      {!builderSendSms && sel?.phone && (
+                        <div className="text-xs text-gray-500">{sel.phone}</div>
+                      )}
+                    </div>
+                  </label>
+                </div>
+
+                <div className="flex gap-3">
+                  <button onClick={() => setShowSendModal(false)} className="btn-secondary flex-1">Cancel</button>
+                  <button
+                    onClick={() => {
+                      if (!builderSendEmail && !builderSendSms) return
+                      setShowSendModal(false)
+                      handleSave('sent', { email: builderSendEmail, sms: builderSendSms, phone: builderSmsPhone })
+                    }}
+                    disabled={saving || (!builderSendEmail && !builderSendSms)}
+                    className="btn-primary flex-1"
+                  >
+                    {saving ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                    {saving ? 'Sending…' : 'Send Proposal'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── New Project Modal ── */}
       {showNewProject && (

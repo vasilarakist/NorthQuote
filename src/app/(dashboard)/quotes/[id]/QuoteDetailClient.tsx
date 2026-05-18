@@ -14,7 +14,7 @@ import {
   Link2, MessageSquare, Plus, CheckCircle2, History, RotateCcw,
   ChevronDown,
 } from 'lucide-react'
-import type { QuoteVersion } from '@/types/database'
+import type { QuoteVersion, QuoteEvent } from '@/types/database'
 
 interface Props {
   quote: Quote & {
@@ -24,11 +24,12 @@ interface Props {
   lineItems: QuoteLineItem[]
   provinceState: string
   versions: QuoteVersion[]
+  events: QuoteEvent[]
 }
 
 const STATUS_COLORS: Record<string, string> = {
   draft:    'bg-gray-100 text-gray-700',
-  sent:     'bg-blue-100 text-blue-700',
+  sent:     'bg-blue-600 text-white font-semibold px-3 py-1 text-sm rounded-full',
   viewed:   'bg-yellow-100 text-yellow-700',
   accepted: 'bg-green-100 text-green-700',
   declined: 'bg-red-100 text-red-700',
@@ -49,7 +50,7 @@ function toLineItemDrafts(items: QuoteLineItem[]): LineItemDraft[] {
   }))
 }
 
-export function QuoteDetailClient({ quote, lineItems: initialLineItems, provinceState, versions: initialVersions }: Props) {
+export function QuoteDetailClient({ quote, lineItems: initialLineItems, provinceState, versions: initialVersions, events }: Props) {
   const router = useRouter()
   const [editing, setEditing] = useState(false)
   const [lineItems, setLineItems] = useState<LineItemDraft[]>(toLineItemDrafts(initialLineItems))
@@ -345,7 +346,9 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
             </>
           )}
           {!editing && canSend && (
-            <button onClick={() => { setJustSent(false); setSendError(''); setShowSendModal(true) }} className="btn-primary"><Send size={14} /> Send Proposal</button>
+            <button onClick={() => { setJustSent(false); setSendError(''); setShowSendModal(true) }} className="btn-primary">
+              <Send size={14} /> {quote.status === 'draft' ? 'Send Proposal' : 'Resend Proposal'}
+            </button>
           )}
           {!editing && canConvert && (
             <button onClick={handleConvertToInvoice} disabled={converting} className="btn-amber">
@@ -508,6 +511,45 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Activity Feed ── */}
+      {events.length > 0 && (
+        <div className="card space-y-3">
+          <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
+            <MessageSquare size={15} className="text-gray-400" /> Activity
+          </h2>
+          <div className="space-y-2">
+            {events.map((ev) => {
+              const dt = new Date(ev.created_at)
+              const dateStr = dt.toLocaleDateString('en-CA', { month: 'long', day: 'numeric', year: 'numeric' })
+              const timeStr = dt.toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit', hour12: true })
+              let label = ''
+              if (ev.event_type === 'opened' || ev.event_type === 'viewed') {
+                label = `${quote.clients?.name ?? 'Client'} opened your proposal on ${dateStr} at ${timeStr}`
+              } else if (ev.event_type === 'sent') {
+                label = `Proposal sent on ${dateStr} at ${timeStr}`
+              } else if (ev.event_type === 'accepted') {
+                label = `${quote.clients?.name ?? 'Client'} accepted the proposal on ${dateStr} at ${timeStr}`
+              } else if (ev.event_type === 'declined') {
+                label = `${quote.clients?.name ?? 'Client'} declined the proposal on ${dateStr} at ${timeStr}`
+              } else {
+                label = `${ev.event_type} on ${dateStr} at ${timeStr}`
+              }
+              return (
+                <div key={ev.id} className="flex items-start gap-3 text-sm text-gray-600">
+                  <div className={cn('w-2 h-2 rounded-full mt-1.5 flex-shrink-0', {
+                    'bg-blue-500': ev.event_type === 'opened' || ev.event_type === 'viewed',
+                    'bg-green-500': ev.event_type === 'accepted',
+                    'bg-red-400': ev.event_type === 'declined',
+                    'bg-gray-400': ev.event_type === 'sent',
+                  })} />
+                  <span>{label}</span>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 
