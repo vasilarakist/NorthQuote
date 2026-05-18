@@ -9,6 +9,8 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { FileText, Plus, Copy, Trash2, Loader2, ChevronUp, ChevronDown, Sparkles } from 'lucide-react'
 
+import type { PaymentStatus } from './page'
+
 interface QuoteRow {
   id: string
   quote_number: string
@@ -19,6 +21,7 @@ interface QuoteRow {
   sent_at: string | null
   clients: { name: string } | null | undefined
   projects: { project_name: string } | null | undefined
+  paymentStatus: PaymentStatus
 }
 
 interface Props {
@@ -240,9 +243,21 @@ export function QuotesListClient({ initialQuotes, organizationId }: Props) {
                       {quote.projects?.project_name ?? '—'}
                     </td>
                     <td className="px-6 py-3.5">
-                      <span className={cn('badge capitalize', STATUS_COLORS[quote.status] ?? 'bg-gray-100 text-gray-600')}>
-                        {quote.status}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={cn('badge capitalize', STATUS_COLORS[quote.status] ?? 'bg-gray-100 text-gray-600')}>
+                          {quote.status}
+                        </span>
+                        {quote.paymentStatus === 'partial' && (
+                          <span className="badge border border-green-500 text-green-700 bg-transparent">
+                            Deposit paid
+                          </span>
+                        )}
+                        {quote.paymentStatus === 'full' && (
+                          <span className="badge bg-green-600 text-white">
+                            Paid in full
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-6 py-3.5 text-right font-medium text-gray-900">
                       {formatCurrency(quote.total, quote.currency)}
