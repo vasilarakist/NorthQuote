@@ -134,6 +134,13 @@ export default async function ProposalPage({ params }: { params: Promise<{ token
 
   const lineItems = Array.isArray(quote.quote_line_items) ? quote.quote_line_items : []
 
+  // Load payment milestones if quote has a payment schedule
+  const { data: milestones } = await supabase
+    .from('payment_milestones')
+    .select('*')
+    .eq('quote_id', quote.id)
+    .order('sort_order')
+
   return (
     <ProposalClient
       quote={quote}
@@ -143,6 +150,7 @@ export default async function ProposalPage({ params }: { params: Promise<{ token
       lineItems={lineItems}
       tierQuotes={tierQuotes}
       clientIp={ip}
+      milestones={milestones ?? []}
     />
   )
 }

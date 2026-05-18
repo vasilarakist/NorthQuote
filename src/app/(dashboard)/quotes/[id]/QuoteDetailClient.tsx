@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import type { Quote, QuoteLineItem } from '@/types/database'
+import type { Quote, QuoteLineItem, QuoteVersion, QuoteEvent, PaymentMilestone, MilestoneStatus } from '@/types/database'
 import { LineItemsEditor, type LineItemDraft, newLineItem } from '@/components/ui/LineItemsEditor'
 import { getTaxInfo, calcLineTotal } from '@/lib/taxes'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -14,7 +14,6 @@ import {
   Link2, MessageSquare, Plus, CheckCircle2, History, RotateCcw,
   ChevronDown,
 } from 'lucide-react'
-import type { QuoteVersion, QuoteEvent } from '@/types/database'
 
 interface Props {
   quote: Quote & {
@@ -25,6 +24,7 @@ interface Props {
   provinceState: string
   versions: QuoteVersion[]
   events: QuoteEvent[]
+  milestones: PaymentMilestone[]
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -50,7 +50,19 @@ function toLineItemDrafts(items: QuoteLineItem[]): LineItemDraft[] {
   }))
 }
 
-export function QuoteDetailClient({ quote, lineItems: initialLineItems, provinceState, versions: initialVersions, events }: Props) {
+const MILESTONE_STATUS: Record<MilestoneStatus, { label: string; color: string; dot: string }> = {
+  paid:      { label: 'Paid',      color: 'text-green-600',  dot: 'bg-green-500' },
+  requested: { label: 'Requested', color: 'text-amber-600',  dot: 'bg-amber-500' },
+  pending:   { label: 'Pending',   color: 'text-gray-400',   dot: 'bg-gray-300'  },
+}
+
+const TRIGGER_LABELS: Record<string, string> = {
+  on_acceptance: 'On acceptance',
+  manual: 'Manual',
+  on_date: 'On date',
+}
+
+export function QuoteDetailClient({ quote, lineItems: initialLineItems, provinceState, versions: initialVersions, events, milestones: initialMilestones }: Props) {
   const router = useRouter()
   const [editing, setEditing] = useState(false)
   const [lineItems, setLineItems] = useState<LineItemDraft[]>(toLineItemDrafts(initialLineItems))
@@ -81,6 +93,11 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
   const [versions, setVersions] = useState<QuoteVersion[]>(initialVersions)
   const [showVersions, setShowVersions] = useState(false)
   const [restoring, setRestoring] = useState<string | null>(null)
+
+  // Payment milestones
+  const [milestones, setMilestones] = useState<PaymentMilestone[]>(initialMilestones)
+  const [requestingPayment, setRequestingPayment] = useState<string | null>(null)
+  const [requestError, setRequestError] = useState<Record<string, string>>({})
 
   const taxInfo = getTaxInfo(provinceState)
   const subtotal = useMemo(() => lineItems.reduce((s, i) => s + i.total, 0), [lineItems])
@@ -217,6 +234,24 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
       router.push(`/invoices/${data.invoice_id}`)
     }
     setConverting(false)
+  }
+
+  // ─── Request milestone payment ────────────────────────────────
+  async function handleRequestPayment(milestoneId: string) {
+    setRequestingPayment(milestoneId)
+    setRequestError((prev) => ({ ...prev, [milestoneId]: '' }))
+    const res = await fetch('/api/milestones/request-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ milestone_id: milestoneId }),
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      setRequestError((prev) => ({ ...prev, [milestoneId]: data.error ?? 'Failed to send.' }))
+    } else {
+      setMilestones((prev) => prev.map((m) => m.id === milestoneId ? { ...m, status: 'requested' } : m))
+    }
+    setRequestingPayment(null)
   }
 
   // ─── Duplicate ────────────────────────────────────────────────
@@ -511,6 +546,75 @@ export function QuoteDetailClient({ quote, lineItems: initialLineItems, province
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Payment Schedule ── */}
+      {milestones.length > 0 && (
+        <div className="card space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-gray-900 text-sm">Payment Schedule</h2>
+            <span className="text-xs text-gray-400">
+              {milestones.filter(m => m.status === 'paid').length}/{milestones.length} paid
+            </span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-green-500 rounded-full transition-all"
+              style={{ width: `${(milestones.filter(m => m.status === 'paid').length / milestones.length) * 100}%` }}
+            />
+          </div>
+
+          <div className="space-y-3">
+            {milestones.map((m) => {
+              const cfg = MILESTONE_STATUS[m.status] ?? MILESTONE_STATUS.pending
+              const amt = (m.amount_cents ?? 0) / 100
+              const canRequest = m.trigger_type === 'manual' && m.status !== 'paid'
+              const paymentUrl = quote.proposal_token
+                ? `${process.env.NEXT_PUBLIC_APP_URL}/proposal/${quote.proposal_token}/milestone/${m.id}`
+                : null
+
+              return (
+                <div key={m.id} className="flex items-start gap-3 py-2 border-b border-gray-100 last:border-0">
+                  <div className={cn('w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0', cfg.dot)} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium text-gray-900">{m.label}</span>
+                      <span className={cn('text-xs font-medium', cfg.color)}>{cfg.label}</span>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-0.5">
+                      {TRIGGER_LABELS[m.trigger_type] ?? m.trigger_type}
+                      {m.trigger_date && ` · ${new Date(m.trigger_date).toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' })}`}
+                      {m.percentage != null && ` · ${m.percentage}%`}
+                    </div>
+                    {requestError[m.id] && (
+                      <div className="text-xs text-red-500 mt-1">{requestError[m.id]}</div>
+                    )}
+                    {m.status === 'requested' && paymentUrl && (
+                      <div className="text-xs text-blue-600 mt-1 truncate">
+                        Payment link sent · <a href={paymentUrl} target="_blank" rel="noopener noreferrer" className="underline">View link</a>
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-right flex-shrink-0 space-y-1">
+                    <div className="text-sm font-semibold text-gray-900">{formatCurrency(amt, quote.currency)}</div>
+                    {canRequest && (
+                      <button
+                        onClick={() => handleRequestPayment(m.id)}
+                        disabled={requestingPayment === m.id}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors flex items-center gap-1 ml-auto disabled:opacity-50"
+                      >
+                        {requestingPayment === m.id ? <Loader2 size={10} className="animate-spin" /> : <Send size={10} />}
+                        {m.status === 'requested' ? 'Resend' : 'Request Payment'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 

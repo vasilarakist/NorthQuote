@@ -7,10 +7,10 @@ import { SignaturePad } from '@/components/ui/SignaturePad'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { calcCardFee } from '@/lib/stripe'
 import { cn } from '@/lib/utils'
-import type { QuoteLineItem } from '@/types/database'
+import type { QuoteLineItem, PaymentMilestone, MilestoneStatus } from '@/types/database'
 import {
   CheckCircle2, XCircle, PenLine, CreditCard, Building2,
-  ChevronRight, Loader2, Shield, Phone, Mail,
+  ChevronRight, Loader2, Shield, Phone, Mail, Clock,
 } from 'lucide-react'
 
 type Step = 'view' | 'signing' | 'declined_form' | 'payment' | 'paid' | 'declined' | 'complete'
@@ -32,6 +32,7 @@ interface Props {
     subtotal: number; tax_amount: number; tax_rate: number | null; tax_type: string | null;
     total: number; currency: string; valid_until: string | null;
     scope_summary: string | null; notes_to_client: string | null; ai_generated: boolean;
+    has_payment_schedule?: boolean;
   }
   org: Org | null
   client: Client | null
@@ -39,6 +40,13 @@ interface Props {
   lineItems: QuoteLineItem[]
   tierQuotes: TierQuote[]
   clientIp: string | null
+  milestones: PaymentMilestone[]
+}
+
+const MILESTONE_STATUS_CFG: Record<MilestoneStatus, { label: string; color: string; dot: string }> = {
+  paid:      { label: 'Paid',     color: 'text-green-600', dot: 'bg-green-500' },
+  requested: { label: 'Due',      color: 'text-amber-600', dot: 'bg-amber-500' },
+  pending:   { label: 'Upcoming', color: 'text-gray-400',  dot: 'bg-gray-300'  },
 }
 
 const TIER_LABELS: Record<string, string> = { good: 'Good', better: 'Better', best: 'Best' }
@@ -87,7 +95,7 @@ function PaymentForm({
 }
 
 // ── Main component ────────────────────────────────────────────────
-export function ProposalClient({ quote, org, client, project, lineItems, tierQuotes, clientIp }: Props) {
+export function ProposalClient({ quote, org, client, project, lineItems, tierQuotes, clientIp, milestones }: Props) {
   const primary = org?.brand_color_primary ?? '#0F1C2E'
   const accent  = org?.brand_color_secondary ?? '#D4943C'
 
@@ -107,8 +115,21 @@ export function ProposalClient({ quote, org, client, project, lineItems, tierQuo
       : null
   )
 
-  const cardFee = useMemo(() => calcCardFee(quote.total), [quote.total])
-  const totalWithFee = paymentMethod === 'card' ? quote.total + cardFee : quote.total
+  // Payment schedule support
+  const hasSchedule = Boolean(quote.has_payment_schedule && milestones.length > 0)
+  const onAcceptanceMilestone = hasSchedule
+    ? milestones.find((m) => m.trigger_type === 'on_acceptance' && m.status !== 'paid') ?? null
+    : null
+  const [paidMilestoneId, setPaidMilestoneId] = useState<string | null>(null)
+  const [displayMilestones, setDisplayMilestones] = useState<PaymentMilestone[]>(milestones)
+
+  // For payment schedule, pay only the on_acceptance milestone amount; otherwise full total
+  const payAmount = onAcceptanceMilestone
+    ? (onAcceptanceMilestone.amount_cents ?? 0) / 100
+    : quote.total
+
+  const cardFee = useMemo(() => calcCardFee(payAmount), [payAmount])
+  const totalWithFee = paymentMethod === 'card' ? payAmount + cardFee : payAmount
   const hasStripe = Boolean(org?.stripe_account_id && process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY)
 
   // Log signature_started event
@@ -138,18 +159,23 @@ export function ProposalClient({ quote, org, client, project, lineItems, tierQuo
     const data = await res.json()
     if (!res.ok) { setError(data.error ?? 'Something went wrong.'); setLoading(false); return }
 
-    if (hasStripe) {
-      // Create payment intent
-      const piRes = await fetch('/api/stripe/payment-intent', {
+    if (hasStripe && (onAcceptanceMilestone || !hasSchedule)) {
+      // Use milestone-specific pay endpoint if payment schedule exists
+      const endpoint = onAcceptanceMilestone ? '/api/milestones/pay' : '/api/stripe/payment-intent'
+      const body = onAcceptanceMilestone
+        ? { milestone_id: onAcceptanceMilestone.id, payment_method_type: paymentMethod }
+        : {
+            quote_id: quote.id,
+            amount: Math.round(totalWithFee * 100),
+            currency: quote.currency.toLowerCase(),
+            stripe_account_id: org?.stripe_account_id,
+            payment_method_types: paymentMethod === 'bank' ? ['us_bank_account', 'acss_debit'] : ['card'],
+          }
+
+      const piRes = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          quote_id: quote.id,
-          amount: Math.round(totalWithFee * 100), // cents
-          currency: quote.currency.toLowerCase(),
-          stripe_account_id: org?.stripe_account_id,
-          payment_method_types: paymentMethod === 'bank' ? ['us_bank_account', 'acss_debit'] : ['card'],
-        }),
+        body: JSON.stringify(body),
       })
       const piData = await piRes.json()
       if (piData.client_secret) {
@@ -179,17 +205,64 @@ export function ProposalClient({ quote, org, client, project, lineItems, tierQuo
   const currentTierQuote = tierQuotes.find((t) => t.tier === selectedTier) ?? null
 
   if (step === 'paid') {
+    const shownMilestones = displayMilestones.map((m) =>
+      m.id === paidMilestoneId ? { ...m, status: 'paid' as const } : m
+    )
+    const allPaid = shownMilestones.length > 0 && shownMilestones.every((m) => m.status === 'paid')
+    const isDepositPaid = Boolean(paidMilestoneId && hasSchedule)
+
     return (
       <div className="min-h-screen flex items-center justify-center p-6" style={{ background: '#f8f9fa' }}>
-        <div className="text-center max-w-md">
-          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <CheckCircle2 className="w-8 h-8 text-green-600" />
+        <div className="w-full max-w-md space-y-6">
+          <div className="text-center">
+            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <CheckCircle2 className="w-8 h-8 text-green-600" />
+            </div>
+            <h1 className="text-2xl font-semibold text-gray-900 mb-2">
+              {allPaid ? 'Fully Paid!' : isDepositPaid ? 'Deposit Paid!' : "You're all set!"}
+            </h1>
+            <p className="text-gray-500 mb-1">
+              {isDepositPaid
+                ? `Your deposit has been received. ${org?.name} will be in touch about next steps.`
+                : 'Quote accepted & signed.'}
+            </p>
+            {!isDepositPaid && <p className="text-gray-500">{org?.name} will be in touch shortly.</p>}
           </div>
-          <h1 className="text-2xl font-semibold text-gray-900 mb-2">You&apos;re all set!</h1>
-          <p className="text-gray-500 mb-1">Quote accepted &amp; signed.</p>
-          <p className="text-gray-500">{org?.name} will be in touch shortly.</p>
+
+          {/* Payment schedule tracker */}
+          {shownMilestones.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+              <h2 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
+                <Clock size={14} className="text-gray-400" /> Payment Schedule
+              </h2>
+              <div className="space-y-3">
+                {shownMilestones.map((m) => {
+                  const cfg = MILESTONE_STATUS_CFG[m.status] ?? MILESTONE_STATUS_CFG.pending
+                  const amt = (m.amount_cents ?? 0) / 100
+                  return (
+                    <div key={m.id} className="flex items-center gap-3">
+                      <div className={cn('w-2.5 h-2.5 rounded-full flex-shrink-0', cfg.dot)} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-gray-900">{m.label}</div>
+                        <div className="text-xs text-gray-400">
+                          {m.trigger_type === 'on_acceptance' ? 'On acceptance' : m.trigger_type === 'on_date' ? 'On date' : 'Progress payment'}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="text-sm font-semibold text-gray-900">{formatCurrency(amt, quote.currency)}</div>
+                        <div className={cn('text-xs font-medium', cfg.color)}>{cfg.label}</div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {org?.phone && (
-            <p className="mt-4 text-sm text-gray-400">Questions? Call <a href={`tel:${org.phone}`} className="underline">{org.phone}</a></p>
+            <p className="text-center text-sm text-gray-400">
+              Questions? Call <a href={`tel:${org.phone}`} className="underline">{org.phone}</a>
+            </p>
           )}
         </div>
       </div>
@@ -345,18 +418,47 @@ export function ProposalClient({ quote, org, client, project, lineItems, tierQuo
                 <span>{formatCurrency(quote.tax_amount, quote.currency)}</span>
               </div>
             )}
+            <div className="flex justify-between text-base font-semibold text-gray-900 pt-2 border-t border-gray-200">
+              <span>Total ({quote.currency})</span>
+              <span style={{ color: primary }}>{formatCurrency(quote.total, quote.currency)}</span>
+            </div>
+
+            {/* Payment schedule breakdown */}
+            {hasSchedule && milestones.length > 0 && (
+              <div className="pt-3 mt-1 border-t border-gray-200 space-y-2">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Clock size={11} /> Payment Schedule
+                </p>
+                {milestones.map((m) => {
+                  const cfg = MILESTONE_STATUS_CFG[m.status] ?? MILESTONE_STATUS_CFG.pending
+                  const amt = (m.amount_cents ?? 0) / 100
+                  const isCurrent = m.id === onAcceptanceMilestone?.id && step === 'payment'
+                  return (
+                    <div key={m.id} className={cn('flex justify-between text-sm', isCurrent ? 'font-semibold text-gray-900' : 'text-gray-500')}>
+                      <span className="flex items-center gap-1.5">
+                        <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', cfg.dot)} />
+                        {m.label}
+                        {isCurrent && <span className="text-xs font-normal text-amber-600">← due now</span>}
+                      </span>
+                      <span className={cfg.color}>{formatCurrency(amt, quote.currency)}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
             {step === 'payment' && paymentMethod === 'card' && (
               <div className="flex justify-between text-sm text-gray-500">
                 <span>Card processing fee (2.9% + $0.30)</span>
                 <span>{formatCurrency(cardFee, quote.currency)}</span>
               </div>
             )}
-            <div className="flex justify-between text-base font-semibold text-gray-900 pt-2 border-t border-gray-200">
-              <span>Total ({quote.currency})</span>
-              <span style={{ color: primary }}>
-                {formatCurrency(step === 'payment' && paymentMethod === 'card' ? totalWithFee : quote.total, quote.currency)}
-              </span>
-            </div>
+            {step === 'payment' && onAcceptanceMilestone && (
+              <div className="flex justify-between text-base font-semibold text-gray-900 pt-1 border-t border-gray-200">
+                <span>Due now ({quote.currency})</span>
+                <span style={{ color: primary }}>{formatCurrency(totalWithFee, quote.currency)}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -401,7 +503,9 @@ export function ProposalClient({ quote, org, client, project, lineItems, tierQuo
                 style={{ backgroundColor: primary }}
               >
                 {loading ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
-                {hasStripe ? 'Continue to Payment' : 'Accept Proposal'}
+                {hasStripe
+                  ? (onAcceptanceMilestone ? `Pay Deposit (${formatCurrency((onAcceptanceMilestone.amount_cents ?? 0) / 100, quote.currency)})` : 'Continue to Payment')
+                  : 'Accept Proposal'}
               </button>
             </div>
           </div>
@@ -411,7 +515,9 @@ export function ProposalClient({ quote, org, client, project, lineItems, tierQuo
         {step === 'payment' && clientSecret && stripePromise && (
           <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-5">
             <div>
-              <h2 className="font-semibold text-gray-900 mb-1">Payment</h2>
+              <h2 className="font-semibold text-gray-900 mb-1">
+                {onAcceptanceMilestone ? `Payment: ${onAcceptanceMilestone.label}` : 'Payment'}
+              </h2>
               <p className="text-sm text-gray-500">Secure payment powered by Stripe</p>
             </div>
 
@@ -445,7 +551,10 @@ export function ProposalClient({ quote, org, client, project, lineItems, tierQuo
             <Elements stripe={stripePromise} options={{ clientSecret, appearance: { theme: 'stripe' } }}>
               <PaymentForm
                 total={totalWithFee}
-                onSuccess={() => setStep('paid')}
+                onSuccess={() => {
+                  if (onAcceptanceMilestone) setPaidMilestoneId(onAcceptanceMilestone.id)
+                  setStep('paid')
+                }}
                 onError={setError}
               />
             </Elements>

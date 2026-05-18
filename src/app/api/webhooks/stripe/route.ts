@@ -27,10 +27,18 @@ export async function POST(request: Request) {
     // ── Payment succeeded ─────────────────────────────────────────
     case 'payment_intent.succeeded': {
       const pi = event.data.object as Stripe.PaymentIntent
+      const milestoneId = pi.metadata?.milestone_id
       const quoteId = pi.metadata?.quote_id
 
-      if (quoteId) {
-        // Find invoice linked to this quote
+      if (milestoneId) {
+        // Milestone payment — mark milestone as paid
+        await supabase.from('payment_milestones').update({
+          status: 'paid',
+          paid_at: new Date().toISOString(),
+          stripe_payment_intent_id: pi.id,
+        }).eq('id', milestoneId)
+      } else if (quoteId) {
+        // Full payment — find invoice linked to this quote
         const { data: invoice } = await supabase
           .from('invoices')
           .select('id')

@@ -88,6 +88,21 @@ export function QuoteBuilderClient({
   const [builderSendSms, setBuilderSendSms] = useState(false)
   const [builderSmsPhone, setBuilderSmsPhone] = useState('')
 
+  // Payment schedule
+  type MilestoneValueType = 'percentage' | 'fixed'
+  type MilestoneTriggerType = 'on_acceptance' | 'manual' | 'on_date'
+  interface MilestoneDraft {
+    _id: string; label: string; value_type: MilestoneValueType; value: number
+    trigger_type: MilestoneTriggerType; trigger_date: string
+  }
+  const DEFAULT_MILESTONES: MilestoneDraft[] = [
+    { _id: '1', label: 'Deposit', value_type: 'percentage', value: 30, trigger_type: 'on_acceptance', trigger_date: '' },
+    { _id: '2', label: 'Progress', value_type: 'percentage', value: 40, trigger_type: 'manual', trigger_date: '' },
+    { _id: '3', label: 'Final payment', value_type: 'percentage', value: 30, trigger_type: 'manual', trigger_date: '' },
+  ]
+  const [paymentType, setPaymentType] = useState<'full' | 'schedule'>('full')
+  const [milestones, setMilestones] = useState<MilestoneDraft[]>(DEFAULT_MILESTONES)
+
   // Inline new client modal
   const [showNewClient, setShowNewClient] = useState(false)
   const [newClientName, setNewClientName] = useState('')
@@ -294,6 +309,7 @@ export function QuoteBuilderClient({
         notes_to_client: notes || null,
         internal_notes: internalNotes || null,
         sent_at: status === 'sent' ? new Date().toISOString() : null,
+        has_payment_schedule: paymentType === 'schedule',
       })
       .select()
       .single()
@@ -340,8 +356,47 @@ export function QuoteBuilderClient({
         return
       }
 
+      // Validate payment schedule
+      if (paymentType === 'schedule') {
+        if (milestones.length === 0) {
+          setSaveError('Add at least one payment milestone.')
+          return
+        }
+        const refTotal = tieredMode ? tierData.good.total : total
+        const totalPct = milestones.reduce((sum, m) => {
+          if (m.value_type === 'percentage') return sum + m.value
+          return sum + (refTotal > 0 ? (m.value / refTotal) * 100 : 0)
+        }, 0)
+        if (Math.abs(totalPct - 100) > 0.5) {
+          setSaveError(`Payment schedule must total 100% (currently ${totalPct.toFixed(1)}%).`)
+          return
+        }
+      }
+
       setSaveError('')
       setSaving(true)
+
+      // Helper: insert milestones for a quote
+      const insertMilestones = async (
+        supabase: ReturnType<typeof createClient>,
+        quoteId: string,
+        quoteTotal: number
+      ) => {
+        const totalCents = Math.round(quoteTotal * 100)
+        const payload = milestones.map((m, idx) => ({
+          quote_id: quoteId,
+          label: m.label,
+          amount_cents: m.value_type === 'percentage'
+            ? Math.round(totalCents * m.value / 100)
+            : Math.round(m.value * 100),
+          percentage: m.value_type === 'percentage' ? m.value : null,
+          trigger_type: m.trigger_type,
+          trigger_date: m.trigger_date || null,
+          status: 'pending',
+          sort_order: idx,
+        }))
+        await supabase.from('payment_milestones').insert(payload)
+      }
 
       try {
         const supabase = createClient()
@@ -358,12 +413,22 @@ export function QuoteBuilderClient({
 
         if (tieredMode) {
           const goodQuote = await saveSingleQuote(supabase, `${baseNumber}-G`, status, goodItems, goodNotes, 'good')
-          await saveSingleQuote(supabase, `${baseNumber}-B`, status, betterItems, betterNotes, 'better')
-          await saveSingleQuote(supabase, `${baseNumber}-X`, status, bestItems, bestNotes, 'best')
+          const betterQuote = await saveSingleQuote(supabase, `${baseNumber}-B`, status, betterItems, betterNotes, 'better')
+          const bestQuote = await saveSingleQuote(supabase, `${baseNumber}-X`, status, bestItems, bestNotes, 'best')
           primaryQuoteId = goodQuote.id
+          if (paymentType === 'schedule') {
+            await Promise.all([
+              insertMilestones(supabase, goodQuote.id, tierData.good.total),
+              insertMilestones(supabase, betterQuote.id, tierData.better.total),
+              insertMilestones(supabase, bestQuote.id, tierData.best.total),
+            ])
+          }
         } else {
           const quote = await saveSingleQuote(supabase, baseNumber, status, lineItems, notesToClient, 'single')
           primaryQuoteId = quote.id
+          if (paymentType === 'schedule') {
+            await insertMilestones(supabase, primaryQuoteId, total)
+          }
         }
 
         if (status === 'sent') {
@@ -404,6 +469,7 @@ export function QuoteBuilderClient({
       clientId, projectId, lineItems, goodItems, betterItems, bestItems,
       goodNotes, betterNotes, bestNotes, tieredMode,
       organizationId, taxInfo, validUntil, jobDescription, scopeSummary, notesToClient, internalNotes, router,
+      paymentType, milestones, total, tierData,
     ]
   )
 
@@ -613,6 +679,116 @@ export function QuoteBuilderClient({
           <LineItemsEditor items={lineItems} onChange={setLineItems} />
         </div>
       )}
+
+      {/* ── Payment Schedule ── */}
+      <div className="card space-y-4">
+        <h2 className="font-semibold text-gray-900">Payment</h2>
+        <div className="flex gap-2">
+          {(['full', 'schedule'] as const).map((type) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => setPaymentType(type)}
+              className={cn(
+                'px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all',
+                paymentType === type
+                  ? (type === 'schedule' ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-navy-900 bg-navy-50 text-navy-900')
+                  : 'border-gray-200 text-gray-600 hover:border-gray-300'
+              )}
+            >
+              {type === 'full' ? 'Full payment' : 'Payment schedule'}
+            </button>
+          ))}
+        </div>
+
+        {paymentType === 'schedule' && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500">Define when payments are due. Percentages must total 100%.</p>
+
+            {/* Column headers */}
+            <div className="grid grid-cols-12 gap-2 text-xs text-gray-400 font-medium px-1">
+              <span className="col-span-4">Label</span>
+              <span className="col-span-2">Type</span>
+              <span className="col-span-2">Amount</span>
+              <span className="col-span-3">Trigger</span>
+              <span className="col-span-1" />
+            </div>
+
+            {milestones.map((m, idx) => (
+              <div key={m._id} className="grid grid-cols-12 gap-2 items-start">
+                <input
+                  className="input col-span-4 text-sm"
+                  value={m.label}
+                  onChange={(e) => setMilestones((prev) => prev.map((x) => x._id === m._id ? { ...x, label: e.target.value } : x))}
+                  placeholder="Milestone label"
+                />
+                <select
+                  value={m.value_type}
+                  onChange={(e) => setMilestones((prev) => prev.map((x) => x._id === m._id ? { ...x, value_type: e.target.value as 'percentage' | 'fixed' } : x))}
+                  className="input col-span-2 text-sm"
+                >
+                  <option value="percentage">%</option>
+                  <option value="fixed">$</option>
+                </select>
+                <input
+                  type="number"
+                  min={0}
+                  max={m.value_type === 'percentage' ? 100 : undefined}
+                  step={m.value_type === 'percentage' ? 1 : 0.01}
+                  value={m.value}
+                  onChange={(e) => setMilestones((prev) => prev.map((x) => x._id === m._id ? { ...x, value: parseFloat(e.target.value) || 0 } : x))}
+                  className="input col-span-2 text-sm"
+                />
+                <select
+                  value={m.trigger_type}
+                  onChange={(e) => setMilestones((prev) => prev.map((x) => x._id === m._id ? { ...x, trigger_type: e.target.value as 'on_acceptance' | 'manual' | 'on_date', trigger_date: '' } : x))}
+                  className="input col-span-3 text-sm"
+                >
+                  <option value="on_acceptance">On acceptance</option>
+                  <option value="manual">Manual</option>
+                  <option value="on_date">On date</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setMilestones((prev) => prev.filter((x) => x._id !== m._id))}
+                  className="col-span-1 p-2 text-gray-400 hover:text-red-500 transition-colors"
+                  title="Remove"
+                >
+                  <X size={14} />
+                </button>
+                {m.trigger_type === 'on_date' && (
+                  <input
+                    type="date"
+                    value={m.trigger_date}
+                    onChange={(e) => setMilestones((prev) => prev.map((x) => x._id === m._id ? { ...x, trigger_date: e.target.value } : x))}
+                    className="input col-span-5 col-start-5 text-sm"
+                  />
+                )}
+              </div>
+            ))}
+
+            <div className="flex items-center justify-between pt-1">
+              <button
+                type="button"
+                onClick={() => setMilestones((prev) => [...prev, { _id: crypto.randomUUID(), label: '', value_type: 'percentage', value: 0, trigger_type: 'manual', trigger_date: '' }])}
+                className="flex items-center gap-1 text-sm text-amber-600 hover:text-amber-700 font-medium transition-colors"
+              >
+                <Plus size={14} /> Add milestone
+              </button>
+              {(() => {
+                const refTotal = tieredMode ? tierData.good.total : total
+                const pct = milestones.reduce((s, m) => s + (m.value_type === 'percentage' ? m.value : (refTotal > 0 ? (m.value / refTotal) * 100 : 0)), 0)
+                const ok = Math.abs(pct - 100) <= 0.5
+                return (
+                  <span className={cn('text-sm font-medium', ok ? 'text-green-600' : 'text-red-500')}>
+                    Total: {pct.toFixed(1)}% {ok ? '✓' : '— must be 100%'}
+                  </span>
+                )
+              })()}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* ── Notes & Options ── */}
       <div className="card space-y-4">

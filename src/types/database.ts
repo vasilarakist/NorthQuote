@@ -9,6 +9,8 @@ export type FollowUpStatus = 'pending' | 'sent' | 'cancelled'
 export type ReferralStatus = 'pending' | 'converted' | 'credited'
 export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | 'incomplete'
 export type SubscriptionPlan = 'starter' | 'pro' | 'scale'
+export type MilestoneStatus = 'pending' | 'requested' | 'paid'
+export type MilestoneTrigger = 'on_acceptance' | 'manual' | 'on_date'
 
 export interface Organization {
   id: string
@@ -110,6 +112,7 @@ export interface Quote {
   signature_data: string | null
   signature_ip: string | null
   proposal_token: string | null
+  has_payment_schedule: boolean
   created_at: string
   updated_at: string
   // joined
@@ -212,6 +215,22 @@ export interface QuoteEvent {
   ip_address: string | null
   user_agent: string | null
   created_at: string
+}
+
+export interface PaymentMilestone {
+  id: string
+  quote_id: string
+  label: string
+  amount_cents: number | null
+  percentage: number | null
+  trigger_type: MilestoneTrigger
+  trigger_date: string | null
+  status: MilestoneStatus
+  paid_at: string | null
+  stripe_payment_intent_id: string | null
+  sort_order: number
+  created_at: string
+  updated_at: string
 }
 
 // Insert types (omit auto-generated fields)

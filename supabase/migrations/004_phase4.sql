@@ -12,7 +12,8 @@ ALTER TABLE organizations ADD COLUMN IF NOT EXISTS total_referral_credits NUMERI
 CREATE INDEX IF NOT EXISTS idx_quote_versions_quote_id_version ON quote_versions(quote_id, version_number DESC);
 
 -- RLS: Allow authenticated users to read their own org's quote_versions
-CREATE POLICY IF NOT EXISTS "quote_versions_org_select" ON quote_versions
+DROP POLICY IF EXISTS "quote_versions_org_select" ON quote_versions;
+CREATE POLICY "quote_versions_org_select" ON quote_versions
   FOR SELECT USING (
     EXISTS (
       SELECT 1 FROM quotes q
@@ -22,7 +23,8 @@ CREATE POLICY IF NOT EXISTS "quote_versions_org_select" ON quote_versions
     )
   );
 
-CREATE POLICY IF NOT EXISTS "quote_versions_org_insert" ON quote_versions
+DROP POLICY IF EXISTS "quote_versions_org_insert" ON quote_versions;
+CREATE POLICY "quote_versions_org_insert" ON quote_versions
   FOR INSERT WITH CHECK (
     EXISTS (
       SELECT 1 FROM quotes q
@@ -33,7 +35,8 @@ CREATE POLICY IF NOT EXISTS "quote_versions_org_insert" ON quote_versions
   );
 
 -- RLS: Allow authenticated users to read their own referrals
-CREATE POLICY IF NOT EXISTS "referrals_referrer_select" ON referrals
+DROP POLICY IF EXISTS "referrals_referrer_select" ON referrals;
+CREATE POLICY "referrals_referrer_select" ON referrals
   FOR SELECT USING (
     EXISTS (
       SELECT 1 FROM users u
