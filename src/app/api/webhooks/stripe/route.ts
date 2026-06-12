@@ -6,6 +6,12 @@ import Stripe from 'stripe'
 
 export const dynamic = 'force-dynamic'
 
+// Health-check — lets you verify the route is reachable without a Stripe signature.
+// Visit /api/webhooks/stripe in a browser to confirm a 200 before testing with Stripe.
+export function GET() {
+  return NextResponse.json({ ok: true, message: 'Stripe webhook active' })
+}
+
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
 
 async function sendContractorPaymentNotification({
