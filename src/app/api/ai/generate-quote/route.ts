@@ -61,7 +61,16 @@ Each line item object must have exactly these keys:
 - "unit_price": number — in CAD, realistic for the province (${province_state || 'ON'})
 - "markup_percent": number — typical markup for category (materials: 20-35%, labour: 10-20%, permits: 0%)
 
-Guidelines:
+CRITICAL PRICING RULE — read this first:
+1. Scan the job description for any stated price or budget. Look for patterns like "$10,000", "10k", "$8,500", "quoted at X", "budget is X", "price is X", "for $X", "total of $X".
+2. If a price IS mentioned: you MUST work BACKWARDS from that target total.
+   - The target is the PRE-TAX total billed to the client (sum of each item's quantity × unit_price × (1 + markup_percent/100)).
+   - Generate 4-10 realistic line items whose billed totals sum to approximately the stated price (within 2%).
+   - Distribute the price realistically across materials, labour, and permits for the trade and scope described.
+   - Adjust quantities and unit prices so the math works out — do NOT just use "1 ls" for the whole job.
+3. If NO price is mentioned: generate your best market-rate estimate using realistic Canadian pricing.
+
+General guidelines:
 - Separate materials and labour into distinct line items
 - Include permits/inspections if typically required for the trade and scope
 - Use realistic Canadian market pricing for ${province_state || 'ON'}
