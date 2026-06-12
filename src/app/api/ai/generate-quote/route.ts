@@ -25,6 +25,36 @@ function extractJSON(text: string): unknown {
   return JSON.parse(raw)
 }
 
+/** Extract a stated dollar target from the description, e.g. "$10,000", "10k", "$8.5k" → number */
+function extractTargetPrice(description: string): number | null {
+  // Dollar sign + number + optional k/K multiplier (e.g. $10,000 / $10k / $8.5k)
+  const dollarK = description.match(/\$\s*([\d,]+(?:\.\d+)?)\s*k\b/i)
+  if (dollarK) {
+    const v = parseFloat(dollarK[1].replace(/,/g, '')) * 1000
+    if (v >= 100) return v
+  }
+
+  const dollar = description.match(/\$\s*([\d,]+(?:\.\d{1,2})?)(?!\s*k\b)/i)
+  if (dollar) {
+    const v = parseFloat(dollar[1].replace(/,/g, ''))
+    if (v >= 100) return v
+  }
+
+  // Bare number + k (e.g. "10k bathroom") — only when directly adjacent to the multiplier
+  const bareK = description.match(/\b([\d,]+(?:\.\d+)?)\s*k\b/i)
+  if (bareK) {
+    const v = parseFloat(bareK[1].replace(/,/g, '')) * 1000
+    if (v >= 100) return v
+  }
+
+  return null
+}
+
+/** Sum of qty × unit_price × (1 + markup/100) for all line items */
+function computeBilledTotal(items: LineItemResult[]): number {
+  return items.reduce((sum, item) => sum + item.quantity * item.unit_price * (1 + item.markup_percent / 100), 0)
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -43,9 +73,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'description is required' }, { status: 400 })
   }
 
+  const targetPrice = extractTargetPrice(description)
+
   const priceBookContext = price_book_items.length > 0
     ? `\n\nThe contractor has the following items in their price book — use these exact prices and markup rates if the items match the job:\n${JSON.stringify(price_book_items, null, 2)}`
     : ''
+
+  const pricingRule = targetPrice != null
+    ? `CRITICAL PRICING RULE — A TARGET PRICE IS STATED:
+The contractor has stated a target price of $${targetPrice.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.
+
+You MUST produce line items whose billed totals sum to EXACTLY this target (within 1%).
+
+The billed total formula for each line item is:
+  item_total = quantity × unit_price × (1 + markup_percent / 100)
+
+The overall billed total = SUM of all item_totals.
+
+Steps you MUST follow:
+1. Decide how to distribute the $${targetPrice.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} realistically across materials, labour, and permits for this trade and scope.
+2. Choose realistic quantities and unit prices so each item_total makes sense on its own.
+3. BEFORE writing the JSON, verify your math: add up every (quantity × unit_price × (1 + markup_percent/100)) and confirm the sum equals $${targetPrice.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} within 1%.
+4. If your sum is off, adjust the unit_price of the LAST labour line item (or the largest line item) to make the total exact. Recalculate and confirm before outputting.
+5. Output ONLY the JSON — do NOT output your working or any prose.`
+    : `PRICING RULE — NO TARGET PRICE STATED:
+Generate your best market-rate estimate using realistic Canadian pricing for ${province_state || 'ON'}.
+If the contractor mentions a budget or price later, you would work backwards — but for now, estimate normally.`
 
   const systemPrompt = `You are an expert Canadian trades estimator specializing in ${trade_type || 'general contracting'}.
 Your job is to produce detailed, accurate cost estimates for jobs in Canadian provinces/territories.
@@ -61,14 +114,7 @@ Each line item object must have exactly these keys:
 - "unit_price": number — in CAD, realistic for the province (${province_state || 'ON'})
 - "markup_percent": number — typical markup for category (materials: 20-35%, labour: 10-20%, permits: 0%)
 
-CRITICAL PRICING RULE — read this first:
-1. Scan the job description for any stated price or budget. Look for patterns like "$10,000", "10k", "$8,500", "quoted at X", "budget is X", "price is X", "for $X", "total of $X".
-2. If a price IS mentioned: you MUST work BACKWARDS from that target total.
-   - The target is the PRE-TAX total billed to the client (sum of each item's quantity × unit_price × (1 + markup_percent/100)).
-   - Generate 4-10 realistic line items whose billed totals sum to approximately the stated price (within 2%).
-   - Distribute the price realistically across materials, labour, and permits for the trade and scope described.
-   - Adjust quantities and unit prices so the math works out — do NOT just use "1 ls" for the whole job.
-3. If NO price is mentioned: generate your best market-rate estimate using realistic Canadian pricing.
+${pricingRule}
 
 General guidelines:
 - Separate materials and labour into distinct line items
@@ -111,6 +157,21 @@ ${priceBookContext}`
       { error: 'Failed to generate quote. Please try again or add line items manually.' },
       { status: 500 }
     )
+  }
+
+  // Post-processing: if a target price was stated and the AI total is off by more than 2%,
+  // proportionally scale all unit_prices to hit the target exactly.
+  if (targetPrice != null && lineItems.length > 0) {
+    const actualTotal = computeBilledTotal(lineItems)
+    const delta = Math.abs(actualTotal - targetPrice) / targetPrice
+    if (delta > 0.02) {
+      console.log(`[generate-quote] AI total ${actualTotal.toFixed(2)} vs target ${targetPrice} (${(delta * 100).toFixed(1)}% off) — scaling unit prices`)
+      const scaleFactor = targetPrice / actualTotal
+      lineItems = lineItems.map((item) => ({
+        ...item,
+        unit_price: Math.round(item.unit_price * scaleFactor * 100) / 100,
+      }))
+    }
   }
 
   return NextResponse.json({ line_items: lineItems })
