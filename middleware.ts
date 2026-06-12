@@ -2,6 +2,15 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl
+
+  // Hard bypass for webhook routes — they authenticate via Stripe's own signature,
+  // never via session cookies. This guard runs before any Supabase call so there
+  // is no chance of a redirect regardless of what the matcher lets through.
+  if (pathname.startsWith('/api/webhooks/') || pathname === '/api/webhooks') {
+    return NextResponse.next()
+  }
+
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(
@@ -26,8 +35,6 @@ export async function middleware(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser()
-
-  const { pathname } = request.nextUrl
 
   // Public routes that don't require auth
   const publicRoutes = ['/login', '/signup', '/auth/callback', '/proposal']
@@ -56,8 +63,17 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Exclude static assets, images, and API webhook routes (which are
-    // unauthenticated by design — Stripe signs requests with its own secret).
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$|api/webhooks).*)',
+    /*
+     * Match all request paths EXCEPT:
+     *  - _next/static  (static files)
+     *  - _next/image   (image optimisation)
+     *  - favicon.ico
+     *  - api/webhooks  (Stripe webhook — unauthenticated by design, guarded above too)
+     *  - common image extensions
+     *
+     * The negative-lookahead alternatives are ordered from most- to least-specific
+     * so the regex engine short-circuits correctly.
+     */
+    '/((?!_next/static|_next/image|favicon\\.ico|api/webhooks|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
