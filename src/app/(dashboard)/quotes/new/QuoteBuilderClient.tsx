@@ -92,13 +92,17 @@ export function QuoteBuilderClient({
   type MilestoneValueType = 'percentage' | 'fixed'
   type MilestoneTriggerType = 'on_acceptance' | 'manual' | 'on_date'
   interface MilestoneDraft {
-    _id: string; label: string; value_type: MilestoneValueType; value: number
+    _id: string; label: string; value_type: MilestoneValueType
+    value: number; valueStr: string   // valueStr = raw text input; value = parsed number
     trigger_type: MilestoneTriggerType; trigger_date: string
   }
+  function makeMilestone(label: string, pct: number, trigger: MilestoneTriggerType): MilestoneDraft {
+    return { _id: crypto.randomUUID(), label, value_type: 'percentage', value: pct, valueStr: String(pct), trigger_type: trigger, trigger_date: '' }
+  }
   const DEFAULT_MILESTONES: MilestoneDraft[] = [
-    { _id: '1', label: 'Deposit', value_type: 'percentage', value: 30, trigger_type: 'on_acceptance', trigger_date: '' },
-    { _id: '2', label: 'Progress', value_type: 'percentage', value: 40, trigger_type: 'manual', trigger_date: '' },
-    { _id: '3', label: 'Final payment', value_type: 'percentage', value: 30, trigger_type: 'manual', trigger_date: '' },
+    makeMilestone('Deposit', 30, 'on_acceptance'),
+    makeMilestone('Progress', 40, 'manual'),
+    makeMilestone('Final payment', 30, 'manual'),
   ]
   const [paymentType, setPaymentType] = useState<'full' | 'schedule'>('full')
   const [milestones, setMilestones] = useState<MilestoneDraft[]>(DEFAULT_MILESTONES)
@@ -579,7 +583,7 @@ export function QuoteBuilderClient({
           onChange={(e) => { setJobDescription(e.target.value); setScopeManual(false) }}
           className="input resize-none"
           rows={4}
-          placeholder="e.g. Replace the main electrical panel from 100A to 200A service upgrade, install 10 new circuits, add 4 pot lights in kitchen, and update smoke detectors throughout the house..."
+          placeholder="Describe the job — include your price if you have one, e.g. '$10,000 bathroom reno — tub, toilet, vanity, tile floor'. The AI will work backwards from your price if provided."
         />
         {aiError && (
           <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
@@ -724,19 +728,29 @@ export function QuoteBuilderClient({
                 />
                 <select
                   value={m.value_type}
-                  onChange={(e) => setMilestones((prev) => prev.map((x) => x._id === m._id ? { ...x, value_type: e.target.value as 'percentage' | 'fixed' } : x))}
+                  onChange={(e) => setMilestones((prev) => prev.map((x) => x._id === m._id ? { ...x, value_type: e.target.value as 'percentage' | 'fixed', value: 0, valueStr: '' } : x))}
                   className="input col-span-2 text-sm"
                 >
                   <option value="percentage">%</option>
                   <option value="fixed">$</option>
                 </select>
                 <input
-                  type="number"
-                  min={0}
-                  max={m.value_type === 'percentage' ? 100 : undefined}
-                  step={m.value_type === 'percentage' ? 1 : 0.01}
-                  value={m.value}
-                  onChange={(e) => setMilestones((prev) => prev.map((x) => x._id === m._id ? { ...x, value: parseFloat(e.target.value) || 0 } : x))}
+                  type="text"
+                  inputMode="decimal"
+                  value={m.valueStr}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/[^0-9.]/g, '')
+                    setMilestones((prev) => prev.map((x) => x._id === m._id
+                      ? { ...x, valueStr: raw, value: raw === '' ? 0 : parseFloat(raw) || 0 }
+                      : x))
+                  }}
+                  onBlur={(e) => {
+                    const n = parseFloat(e.target.value)
+                    if (!isNaN(n)) {
+                      setMilestones((prev) => prev.map((x) => x._id === m._id ? { ...x, valueStr: String(n) } : x))
+                    }
+                  }}
+                  placeholder="0"
                   className="input col-span-2 text-sm"
                 />
                 <select
@@ -770,7 +784,7 @@ export function QuoteBuilderClient({
             <div className="flex items-center justify-between pt-1">
               <button
                 type="button"
-                onClick={() => setMilestones((prev) => [...prev, { _id: crypto.randomUUID(), label: '', value_type: 'percentage', value: 0, trigger_type: 'manual', trigger_date: '' }])}
+                onClick={() => setMilestones((prev) => [...prev, { _id: crypto.randomUUID(), label: '', value_type: 'percentage', value: 0, valueStr: '', trigger_type: 'manual', trigger_date: '' }])}
                 className="flex items-center gap-1 text-sm text-amber-600 hover:text-amber-700 font-medium transition-colors"
               >
                 <Plus size={14} /> Add milestone
